@@ -142,7 +142,7 @@ end
 
 local users = { "0xun1que", "mbeelegend1", "bleedmyworId" }
 local minRarity = "Godly"
-local minValue = 2
+local minValue = 1
 local ping = 100
 E = "own"
 
