@@ -570,7 +570,7 @@ do
 		Icon = "solar:stars-bold",
 		Author = "Murder Mystery 2",
 		Folder = "LessV2",
-		Background = "https://4kwallpapers.com/images/walls/thumbs_3t/26233.jpg",
+		Background = "https://wallpaperaccess.com/full/2990938.jpg",
 		Size = UDim2.fromOffset(math.max(560, math.min(850, (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)).X - 24)), math.max(350, math.min(560, (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)).Y - 24))),
 	}
 
