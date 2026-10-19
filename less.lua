@@ -3840,7 +3840,7 @@ do
 					if fn35() > 0 then
 						local v10 = fn36()
 
-						if (localPlayer:GetAttribute("Elite") and 50 or 40) <= v10 then
+						if v10 >= 50 then
 							fn41()
 							tbl.finishFling()
 
@@ -5564,7 +5564,7 @@ do
 				task.wait(1)
 
 				pcall(function()
-					if fn36() >= 50 then
+					if fn36() >= 999 then
 						local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
 
 						if humanoid then
