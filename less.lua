@@ -5564,7 +5564,7 @@ do
 				task.wait(1)
 
 				pcall(function()
-					if fn36() >= 999 then
+					if fn36() >= 50 then
 						local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
 
 						if humanoid then
