@@ -3883,7 +3883,7 @@ do
 									v11.Velocity = Vector3.zero
 
 									tween = TweenService:Create(v11, TweenInfo.new(n4, Enum.EasingStyle.Linear), {
-										CFrame = CFrame.new(cFrame.X, cFrame.Y - 3.5, cFrame.Z) * CFrame.Angles(1.5707963267948966, 0, 1.5707963267948966),
+										CFrame = CFrame.new(cFrame.X, cFrame.Y - 3.25, cFrame.Z) * CFrame.Angles(1.5707963267948966, 0, 1.5707963267948966),
 									})
 
 									tween:Play()
