@@ -597,6 +597,7 @@ v2:Tag({ Title = "@less.mm2", Icon = "youtube", Color = Color3.fromHex("#ffffff"
 v2:Tag({ Title = "Mobile & PC", Icon = "smartphone", Color = Color3.fromHex("#ffffff"), Radius = 6 })
 
 task.spawn(function()
+	local RunService = game:GetService("RunService")
 	local tbl = { ["Tiktok"] = true, ["Mobile & PC"] = true, ["@Less.mm2"] = true }
 	local colorSequence = ColorSequence.new
 	local tbl2 = {}
@@ -3505,6 +3506,9 @@ do
 	n2 = 23
 	local n3 = 0
 	local v6 = nil
+	local farmRun = 0
+	local farmRoot = nil
+	local farmArrivalTime = nil
 	flag12 = false
 	local flag18 = false
 	flag13 = false
@@ -3527,6 +3531,12 @@ do
 		end
 	end
 
+	local function farmCoinAvailable(coin)
+		return coin and coin.Parent and v4 and coin.Parent == v4:FindFirstChild("CoinContainer")
+			and coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest")
+			and not coin:GetAttribute("Collected") and not tbl.coinSkip(coin)
+	end
+
 	local function fn34()
 		local v7 = fn26(localPlayer)
 		if not v7 or not v4 then
@@ -3542,7 +3552,7 @@ do
 		local v10 = nil
 
 		for _, v11 in v8, children, v9 do
-			if v11.Name == "Coin_Server" and not v11:GetAttribute("Collected") and not tbl.coinSkip(v11) then
+			if v11.Name == "Coin_Server" and farmCoinAvailable(v11) then
 				local magnitude = (v7.Position - v11.Position).Magnitude
 
 				if magnitude < huge then
@@ -3777,17 +3787,15 @@ do
 			return
 		end
 		flag14 = true
+		farmRun += 1
+		local run = farmRun
+		flag15 = false
 		fn40()
 
 		task.spawn(function()
-			while flag14 do
-				task.wait(0.1)
-
+			while flag14 and farmRun == run do
 				pcall(function()
-					if not flag14 then
-						return
-					end
-
+					local character = localPlayer.Character
 					if not localPlayer.Character then
 						flag15 = false
 					else
@@ -3800,7 +3808,7 @@ do
 								return getPlayerData:InvokeServer()
 							end)
 
-							if ok and result then
+							if flag14 and farmRun == run and character == localPlayer.Character and ok and result then
 								local flag19 = result[localPlayer.Name]
 
 								if flag19 then
@@ -3810,6 +3818,19 @@ do
 								flag15 = flag19
 							end
 						end
+					end
+				end)
+				task.wait(0.5)
+			end
+		end)
+
+		task.spawn(function()
+			while flag14 and farmRun == run do
+				RunService.Heartbeat:Wait()
+
+				pcall(function()
+					if not flag14 or farmRun ~= run then
+						return
 					end
 
 					local v7 = next
@@ -3853,13 +3874,17 @@ do
 							end
 						elseif flag15 and localPlayer.Character then
 							local v11 = fn26(localPlayer)
-							local v12 = v11 and fn34()
+							local v12 = v11 and (farmCoinAvailable(v5) and v5 or fn34())
 
 							if v11 and v12 then
 								tbl.sawCoins = true
 
-								if v12 ~= v5 or v5 and v5:GetAttribute("Collected") then
+								if v12 ~= v5 or farmRoot ~= v11 then
 									v5 = v12
+									farmRoot = v11
+									farmArrivalTime = nil
+									v6 = nil
+									n3 = 0
 									flag17 = true
 									tbl.farmTargetTime = tick()
 
@@ -3869,21 +3894,14 @@ do
 									end
 
 									fn38(true)
-									local cFrame = v12.CFrame
-									local n4 = (v11.Position - v12.Position).Magnitude / n2
-
-									if n4 > 15 then
-										n4 = 3
-									end
-
-									if n4 < 0.05 then
-										n4 = 0.05
-									end
+									local targetPosition = v12.Position - Vector3.new(0, 3.25, 0)
+									local n4 = math.max((v11.Position - targetPosition).Magnitude / math.max(n2, 1), 0.05)
+									tbl.farmTargetTime = tick() + n4
 
 									v11.Velocity = Vector3.zero
 
 									tween = TweenService:Create(v11, TweenInfo.new(n4, Enum.EasingStyle.Linear), {
-										CFrame = CFrame.new(cFrame.X, cFrame.Y - 3.25, cFrame.Z) * CFrame.Angles(1.5707963267948966, 0, 1.5707963267948966),
+										CFrame = CFrame.new(targetPosition) * CFrame.Angles(1.5707963267948966, 0, 1.5707963267948966),
 									})
 
 									tween:Play()
@@ -3891,32 +3909,22 @@ do
 								else
 									local magnitude = (v11.Position - v12.Position).Magnitude
 
-									if magnitude <= 6 and not v12:GetAttribute("Collected") then
-										v12.CFrame = CFrame.new(v11.Position + Vector3.new(math.random(-80, 80) / 100, math.random(-50, 300) / 100, math.random(-80, 80) / 100))
-
-										if (v12.Position - v11.Position).Magnitude > 0.1 then
-											v11.CFrame = v11.CFrame * CFrame.new(0, math.random(-20, 20) / 100, math.random(-20, 20) / 100)
-										end
-
-										if v6 ~= v12 then
+									if magnitude <= 3.75 then
+										farmArrivalTime = farmArrivalTime or tick()
+										if type(firetouchinterest) == "function" and (v6 ~= v12 or tick() - n3 >= 0.2) then
 											v6 = v12
 											n3 = tick()
+											pcall(function()
+												firetouchinterest(v11, v12, 0)
+												firetouchinterest(v11, v12, 1)
+											end)
 										end
+									end
 
-										if tick() - n3 > 2 then
-											v6 = nil
-											n3 = 0
-											v5 = nil
-										end
-									elseif magnitude > 6 then
-										local farmTargetTime = tbl.farmTargetTime
-
-										if tick() - farmTargetTime > 4 then
-											tbl.coinFailed(v12)
-											v5 = nil
-											v6 = nil
-											n3 = 0
-										end
+									if (farmArrivalTime and tick() - farmArrivalTime > 1) or tick() - tbl.farmTargetTime > 2 then
+										tbl.coinFailed(v12)
+										tbl.coinSkips[v12] = tick() + ((tbl.coinFails[v12] or 0) >= 2 and 20 or 2)
+										v5 = nil
 									end
 								end
 							elseif v11 then
@@ -4012,6 +4020,7 @@ do
 
 	fn28 = function()
 		flag14 = false
+		farmRun += 1
 
 		if tween then
 			pcall(function()
@@ -4040,6 +4049,9 @@ do
 
 		task.spawn(function()
 			task.wait(0.35)
+			if flag14 then
+				return
+			end
 
 			pcall(function()
 				if tween then
