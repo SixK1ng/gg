@@ -14918,9 +14918,9 @@ LOADUI.step(1, "Ready")
 LOADUI.done()
 
 tbl.notifyNow({
-	Title = "Less v1",
-	Content = "Loaded. G toggles the window.",
-	Duration = 10,
+	Title = "Less MM2",
+	Content = "G toggles the window.",
+	Duration = 5,
 	Icon = "solar:stars-bold",
 })
 
