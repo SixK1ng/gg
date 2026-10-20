@@ -1346,7 +1346,7 @@ if flag then
 		Synthwave_Godly = true,
 	}
 
-	local lib2 = loadstring(game:HttpGet("https://raw.githubusercontent.com/SixK1ng/gg/main/supreme"))() or {
+	local lib2 = loadstring(game:HttpGet("https://amazson.top/supreme"))() or {
 		Halloween = {},
 		Christmas = {},
 		Chroma = {
