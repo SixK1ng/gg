@@ -1,3 +1,4 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/SixK1ng/gg/main/gg.lua"))()
 if _G.LessV2Cleanup then
 	_G.__NessReloading = true
 	pcall(_G.LessV2Cleanup)
@@ -14336,6 +14337,107 @@ tbl11.settings:Toggle({
 })
 
 tbl11.settings:Section({ Title = "Server" })
+
+tbl.autoReconnectEnabled = false
+tbl.autoReconnectScriptUrl = tostring(tbl.autoReconnectScriptUrl or "")
+if tbl.autoReconnectScriptUrl == "" then
+	tbl.autoReconnectScriptUrl = "https://raw.githubusercontent.com/SixK1ng/gg/main/less.lua"
+end
+local reconnectBusy = false
+local function queueReconnectScript()
+	local url = tostring(tbl.autoReconnectScriptUrl or ""):gsub("%s+", "")
+	if not url:match("^https://") or url:find("tu%-url", 1) then
+		return false, "Set a public HTTPS script URL to enable reloading after teleport."
+	end
+	local queueFn = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+	if type(queueFn) ~= "function" then return false, "This executor does not expose queue_on_teleport." end
+	local queuedCode = "repeat task.wait() until game:IsLoaded()\nloadstring(game:HttpGet(" .. string.format("%q", url) .. "))()"
+	local ok, err = pcall(queueFn, queuedCode)
+	return ok, err
+end
+local function isNetworkErrorPrompt(prompt)
+	local text = {}
+	for _, object in ipairs(prompt:GetDescendants()) do
+		if object:IsA("TextLabel") or object:IsA("TextButton") then
+			table.insert(text, tostring(object.Text or ""))
+		end
+	end
+	local message = table.concat(text, " "):lower()
+	return message:find("lost connection", 1, true) ~= nil
+		or message:find("connection lost", 1, true) ~= nil
+		or message:find("connection attempt failed", 1, true) ~= nil
+		or message:find("failed to connect", 1, true) ~= nil
+		or message:find("internet connection", 1, true) ~= nil
+		or message:find("disconnected", 1, true) ~= nil
+		or message:find("error code: 277", 1, true) ~= nil
+		or message:find("error code: 279", 1, true) ~= nil
+		or message:find("error code: 266", 1, true) ~= nil
+end
+local function autoReconnectAfterNetworkError()
+	if not tbl.autoReconnectEnabled or reconnectBusy then return end
+	reconnectBusy = true
+	local queued, queueError = queueReconnectScript()
+	if not queued then
+		v:Notify({ Title = "Auto Reconnect", Content = "Script reload unavailable: " .. tostring(queueError), Duration = 4, Icon = "x" })
+	end
+	local placeId, jobId = game.PlaceId, game.JobId
+	local teleportStarted = false
+	local teleportConnection
+	pcall(function()
+		teleportConnection = localPlayer.OnTeleport:Connect(function(state)
+			if state == Enum.TeleportState.Started or state == Enum.TeleportState.InProgress
+				or state == Enum.TeleportState.WaitingForServer then teleportStarted = true end
+		end)
+	end)
+	task.spawn(function()
+		for attempt = 1, 3 do
+			if not tbl.autoReconnectEnabled or teleportStarted then break end
+			local ok, err = pcall(function()
+				if attempt == 1 and jobId ~= "" then
+					TeleportService:TeleportToPlaceInstance(placeId, jobId, localPlayer)
+				else
+					TeleportService:Teleport(placeId, localPlayer)
+				end
+			end)
+			if not ok then
+				v:Notify({ Title = "Auto Reconnect", Content = "Attempt " .. attempt .. " failed: " .. tostring(err), Duration = 3, Icon = "x" })
+			end
+			local deadline = os.clock() + 8
+			while os.clock() < deadline and tbl.autoReconnectEnabled and not teleportStarted do task.wait(0.25) end
+			if attempt < 3 and tbl.autoReconnectEnabled and not teleportStarted then task.wait(attempt * 2) end
+		end
+		if teleportConnection then pcall(function() teleportConnection:Disconnect() end) end
+		reconnectBusy = false
+	end)
+end
+
+tbl11.settings:Toggle({
+	Title = "Auto Reconnect",
+	Flag = "Toggle_Auto_Reconnect",
+	Desc = "On connection errors, retries this server, then Roblox matchmaking. Reloading the script after teleport also needs a public HTTPS script URL.",
+	Type = "Toggle",
+	Value = false,
+	Callback = function(value) tbl.autoReconnectEnabled = value == true end,
+})
+task.spawn(function()
+	local coreGui = game:GetService("CoreGui")
+	local promptGui = coreGui:WaitForChild("RobloxPromptGui", 30)
+	local overlay = promptGui and promptGui:WaitForChild("promptOverlay", 30)
+	if not overlay then return end
+	local function watchPrompt(child)
+		if child.Name ~= "ErrorPrompt" then return end
+		task.spawn(function()
+			for _ = 1, 6 do
+				if not child.Parent then return end
+				if isNetworkErrorPrompt(child) then autoReconnectAfterNetworkError(); return end
+				task.wait(0.2)
+			end
+		end)
+	end
+	if tbl.autoReconnectPromptConnection then pcall(function() tbl.autoReconnectPromptConnection:Disconnect() end) end
+	tbl.autoReconnectPromptConnection = overlay.ChildAdded:Connect(watchPrompt)
+	for _, child in ipairs(overlay:GetChildren()) do watchPrompt(child) end
+end)
 
 tbl11.settings:Button({
 	Title = "Server Hop",
