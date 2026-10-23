@@ -35287,63 +35287,91 @@ Modules["L"] = function(G)
 				ch = 210,
 				cols = 6,
 			}
+			local function jpegSize(data)
+				if type(data) ~= "string" or string.byte(data, 1) ~= 255 or string.byte(data, 2) ~= 216 then
+					return nil
+				end
+				local i = 3
+				while i < #data - 8 do
+					if string.byte(data, i) ~= 255 then
+						i += 1
+					else
+						i += 1
+						while string.byte(data, i) == 255 do i += 1 end
+						local marker = string.byte(data, i)
+						i += 1
+						if marker == 216 or marker == 217 or marker == 1 or (marker >= 208 and marker <= 215) then
+							continue
+					end
+						local length = (string.byte(data, i) or 0) * 256 + (string.byte(data, i + 1) or 0)
+						if length < 2 then return nil end
+						if marker == 192 or marker == 193 or marker == 194 or marker == 195
+							or marker == 197 or marker == 198 or marker == 199 or marker == 201
+							or marker == 202 or marker == 203 or marker == 205 or marker == 206 or marker == 207 then
+							local height = (string.byte(data, i + 3) or 0) * 256 + (string.byte(data, i + 4) or 0)
+							local width = (string.byte(data, i + 5) or 0) * 256 + (string.byte(data, i + 6) or 0)
+							if width > 0 and height > 0 then return width, height end
+							return nil
+						end
+						i += length
+					end
+				end
+				return nil
+			end
 			pcall(function()
 				if type(writefile) ~= "function" or type(getcustomasset) ~= "function" then
 					return
 				end
-				if not (type(isfile) == "function" and isfile("LessNova/esp_presets_v3.jpg")) then
-					f.data = getgenv().__pulseData.take("esp_presets")
-					if not f.data then
-						return
+				local path = "LessNova/esp_presets_v3.jpg"
+				pcall(function()
+					if type(isfolder) == "function" and not isfolder("LessNova") then
+						makefolder("LessNova")
 					end
-					local c
-					for K, K in ipairs({
-						crypt and crypt.base64decode,
-						base64decode,
-						base64_decode,
-						base64 and base64.decode,
-					}) do
-						if type(K) == "function" then
-							local w, L = pcall(K, f.data)
-							if w and type(L) == "string" and #L > 0 then
-								c = L
-								break
+				end)
+				local downloaded = pcall(function()
+					local imageData = game:HttpGet("https://i.ibb.co/23tJjypP/esp-presets-v3-1.jpg")
+					assert(type(imageData) == "string" and #imageData > 1000
+						and string.byte(imageData, 1) == 255 and string.byte(imageData, 2) == 216,
+						"Preset preview was not a valid JPEG")
+					local imageWidth, imageHeight = jpegSize(imageData)
+					if imageWidth and imageHeight then
+						f.cw = math.floor(imageWidth / f.cols)
+						f.ch = math.floor(imageHeight / 4)
+					end
+					writefile(path, imageData)
+				end)
+				local cached = type(isfile) == "function" and isfile(path)
+				if not downloaded and not cached then
+					local encoded = getgenv().__pulseData.take("esp_presets")
+					if type(encoded) == "string" and #encoded > 0 then
+						local decoded
+						for _, decoder in ipairs({
+							crypt and crypt.base64decode,
+							base64decode,
+							base64_decode,
+							base64 and base64.decode,
+						}) do
+							if type(decoder) == "function" then
+								local ok, result = pcall(decoder, encoded)
+								if ok and type(result) == "string" and #result > 1000 then
+									decoded = result
+									break
+								end
 							end
 						end
-					end
-					if not c then
-						local K = {}
-						for w = 1, 64 do
-							K[string.byte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", w)] = w
-								- 1
-						end
-						local w, L = {}, 0
-						local W = f.data
-						for r = 1, #W - 3, 4 do
-							local _, q, u, s = string.byte(W, r, r + 3)
-							local W = (K[_] or 0) * 262144 + (K[q] or 0) * 4096 + (K[u] or 0) * 64 + (K[s] or 0)
-							local K, r, _ = math.floor(W / 65536) % 256, math.floor(W / 256) % 256, W % 256
-							L += 1
-							if u == 61 then
-								w[L] = string.char(K)
-							elseif s == 61 then
-								w[L] = string.char(K, r)
-							else
-								w[L] = string.char(K, r, _)
+						if decoded then
+							local imageWidth, imageHeight = jpegSize(decoded)
+							if imageWidth and imageHeight then
+								f.cw = math.floor(imageWidth / f.cols)
+								f.ch = math.floor(imageHeight / 4)
 							end
+							writefile(path, decoded)
 						end
-						c = table.concat(w)
 					end
-					pcall(function()
-						if type(isfolder) == "function" and not isfolder("LessNova") then
-							makefolder("LessNova")
-						end
-					end)
-					writefile("LessNova/esp_presets_v3.jpg", c)
 				end
-				local c = getcustomasset("LessNova/esp_presets_v3.jpg")
-				if type(c) == "string" and #c > 0 then
-					f.atlas = c
+				if downloaded or (type(isfile) == "function" and isfile(path)) then
+					local asset = getcustomasset(path)
+					if type(asset) == "string" and #asset > 0 then f.atlas = asset end
 				end
 			end)
 			f.data = nil
@@ -35402,7 +35430,7 @@ Modules["L"] = function(G)
 					{
 						Size = UDim2.fromScale(1, 1),
 						BackgroundTransparency = 1,
-						ScaleType = Enum.ScaleType.Crop,
+						ScaleType = Enum.ScaleType.Stretch,
 						ZIndex = 2,
 					},
 					K
@@ -84226,12 +84254,6 @@ end)
 local Settings = UI:Tab("Settings", "settings")
 Settings:Header("Interface")
 Window:AddAppearance(Settings.Native, { SkipKey=false })
-Settings:Toggle({ Text="Anti AFK", Default=settings.afk.on, Callback=function(v)settings.afk.on=v end })
-Connect(LocalPlayer.Idled,function()
-    if settings.afk.on then
-        local user=Services.VirtualUser;user:CaptureController();user:ClickButton2(Vector2.zero)
-    end
-end)
 Settings:Slider({Text="Screen Stretch",Min=0,Max=35,Default=settings.ui.stretch,Decimals=0,Callback=function(v)settings.ui.stretch=math.clamp(tonumber(v)or 0,0,35)end})
 BindRender("ScreenStretch",Enum.RenderPriority.Last.Value,function()
     local cam=World.CurrentCamera
@@ -89110,8 +89132,10 @@ do
     end
     tab:Toggle({Text="Anti-AFK",Default=settings.afk.on,Callback=function(value)
         settings.afk.on=value
-        for key,set in pairs(setters)do if key:match("^Settings/") and key:find("Anti AFK",1,true)then set(value)end end
+        flag13=value==true
+        if flag13 then fn31() else fn32() end
     end})
+    if settings.afk.on then flag13=true;fn31() end
     tab:Toggle({Text="Auto-Reset When Bag Full",Default=cfg.reset,Callback=function(value)cfg.reset=value;farm.setReset(value and enabled)end})
     local baseStart,baseStop=farm.start,farm.stop
     farm.start=function()baseStart();farm.setReset(cfg.reset)end
