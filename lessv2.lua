@@ -1,4 +1,3 @@
--- Less: 143 auras y hats originales integrados; arranque local.
 local RealEnv = getgenv and getgenv() or _G
 if RealEnv.LessNovaCleanup then pcall(RealEnv.LessNovaCleanup) end
 if RealEnv.LessV2Cleanup then pcall(RealEnv.LessV2Cleanup) end
@@ -9,6 +8,21 @@ end })
 local Players, RunService, Http = Services.Players, Services.RunService, Services.HttpService
 local LocalPlayer, Input, World = Players.LocalPlayer, Services.UserInputService, workspace
 local Host = gethui and gethui() or Services.CoreGui
+-- Recover a stale UI when a previous run failed before registering its finalizer.
+-- Only known Less/Nova roots are touched; filesystem data is handled separately.
+if not RealEnv.LessNovaCleanup then
+    pcall(function()
+        for _, root in ipairs({ Host, Services.CoreGui }) do
+            if root then
+                for _, child in ipairs(root:GetChildren()) do
+                    if child.Name == "Less" or child.Name == "LessNova" then
+                        child:Destroy()
+                    end
+                end
+            end
+        end
+    end)
+end
 local alive, cleaning = true, false
 local connections, finalizers, renderNames = {}, {}, {}
 local instances = setmetatable({}, { __mode = "k" })
@@ -146,7 +160,7 @@ local defaults = {
     infJump = false, infJumpKey = "", antiFling = false,
     bhop = false, bhopPower = 5, bhopSound = false, bhopKey = "",
     bombJump = false, bombJumpKey = "", autoFlingSheriff = false,
-    sheriff = { aimType = "Universal", aimVer = "V3", silentAim = false, autoShoot = false,
+    sheriff = { aimType = "Universal", aimVer = "V2", silentAim = false, autoShoot = false,
         autoGun = false, gunEsp = false, wallbang = false, fov = { on = true, size = 180 }, agDist = 40,
         flickSpeed = 6, flickReturn = 100, flickMouse = true, predEx = 0, resolver = true,
         pblank = false, shotTiming = false, shotSnd = "Off", killSnd = "Off", sndVol = 60 },
@@ -178,7 +192,13 @@ end
 local function decode(value)
     if type(value) ~= "table" then return value end
     if value._type == "Color3" then return Color3.fromHex(value.hex) end
-    if value._type == "Enum" then return Enum.KeyCode[value.value] or Enum.UserInputType[value.value] end
+    if value._type == "Enum" then
+        local function resolve(enum)
+            local ok, item = pcall(function() return enum[value.value] end)
+            return ok and typeof(item) == "EnumItem" and item or nil
+        end
+        return resolve(Enum.KeyCode) or resolve(Enum.UserInputType)
+    end
     local result = {}; for k, v in pairs(value) do result[k] = decode(v) end; return result
 end
 local function readConfig(name)
@@ -191,6 +211,10 @@ local function readConfig(name)
 end
 local saved = readConfig("autosave")
 if saved then merge(settings, saved.settings); stored = saved.controls or {} end
+-- V4/AimX is retired. Migrate old autosaves before any aim module reads them.
+if type(settings.sheriff) == "table" and settings.sheriff.aimVer == "V4" then
+    settings.sheriff.aimVer = "V3"
+end
 -- Aim FOV was a plain number before Pulse X. Accept both forms so old saves keep working.
 if type(settings.sheriff) ~= "table" then settings.sheriff = {} end
 do
@@ -1408,12 +1432,32 @@ Modules["z"] = function(G)
 						local X = { path = f, data = {}, dirty = false }
 						pcall(function()
 							if f and isfile and readfile and isfile(f) then
-								local t = J:JSONDecode(readfile(f))
+								local raw = readfile(f)
+								local t = J:JSONDecode(raw)
 								if type(t) == "table" then
+									if type(t.floats) ~= "table" then t.floats = nil end
+									if type(t.collapsed) ~= "table" then t.collapsed = nil end
+									if t.size ~= nil and (type(t.size) ~= "table" or tonumber(t.size[1]) == nil or tonumber(t.size[2]) == nil) then
+										t.size = nil
+									end
 									X.data = t
+								else
+									error("invalid UI state")
 								end
 							end
 						end)
+						if f and isfile and isfile(f) and type(X.data) ~= "table" then
+							X.data = {}
+						end
+						-- A malformed state must not block the interface. Preserve it for debugging.
+						if f and isfile and isfile(f) and next(X.data) == nil then
+							pcall(function()
+								if readfile and writefile then
+									writefile(f .. ".invalid", readfile(f))
+								end
+								if delfile then delfile(f) end
+							end)
+						end
 						function X.get(t, R)
 							local B = X.data[t]
 							if B == nil then
@@ -1447,7 +1491,15 @@ Modules["z"] = function(G)
 											makefolder("LessNova/nova")
 										end
 									end
-									writefile(f, J:JSONEncode(X.data))
+									local encoded = J:JSONEncode(X.data)
+									local temp = f .. ".tmp"
+									local wrote = pcall(writefile, temp, encoded)
+									if wrote and renamefile then
+										pcall(renamefile, temp, f)
+									elseif wrote then
+										writefile(f, encoded)
+										if delfile then pcall(delfile, temp) end
+									end
 								end)
 							end)
 						end
@@ -2428,9 +2480,10 @@ Modules["z"] = function(G)
 							_:_initCards()
 						end
 						local R = u.get("menuKey", nil)
-						if type(R) == "string" and Enum.KeyCode[R] then
-							_.Key = Enum.KeyCode[R]
-						end
+                        if type(R) == "string" then
+                            local ok, key = pcall(function() return Enum.KeyCode[R] end)
+                            if ok and typeof(key) == "EnumItem" then _.Key = key end
+                        end
 						_:_syncFooter()
 						if _.SetWatermark and u.get("watermark", false) == true then
 							_:SetWatermark(true)
@@ -27611,7 +27664,7 @@ Modules["_"] = function(G)
 			show = true,
 			auto = false,
 			autoRange = 70,
-			autoMin = 55,
+			autoMin = 35,
 			speed = 96,
 			throws = 0,
 			speedN = 0,
@@ -28498,7 +28551,7 @@ Modules["_"] = function(G)
 					Text = "Auto Min Chance %",
 					Min = 20,
 					Max = 95,
-					Default = 55,
+					Default = 35,
 					Decimals = 0,
 					Callback = function(a)
 						f.autoMin = a
@@ -60539,7 +60592,7 @@ Modules["VM.H"] = function(G)
 					PlaceholderText = L,
 					PlaceholderColor3 = Color3.fromHex("B6B0A5"),
 					Text = "",
-					TextColor3 = Color3.fromHex("FFF1DE"),
+                    TextColor3 = Color3.fromHex("F2F3F6"),
 					TextSize = 13,
 					TextXAlignment = Enum.TextXAlignment.Left,
 					TextTruncate = Enum.TextTruncate.AtEnd,
@@ -60583,8 +60636,8 @@ Modules["VM.H"] = function(G)
 				pcall(function()
 					X.bind(L, W)
 				end)
-				L.BackgroundColor3 = Color3.fromHex("FF8B26")
-				L.TextColor3 = Color3.fromHex("FFF7EB")
+				L.BackgroundColor3 = Color3.fromHex("A855F7")
+				L.TextColor3 = Color3.fromHex("F5E8FF")
 				a(L.MouseEnter, function()
 					F(L, 0.14, { BackgroundTransparency = 0.12 })
 				end)
@@ -60656,7 +60709,7 @@ Modules["VM.H"] = function(G)
 				pcall(function()
 					X.bind(h, s, "PlaceholderText")
 				end)
-				h.TextColor3 = Color3.fromHex("FFF1DE")
+                h.TextColor3 = Color3.fromHex("F2F3F6")
 				h.PlaceholderColor3 = Color3.fromHex("B6B0A5")
 				a(h.Focused, function()
 					B(u, "Color", "Accent")
@@ -60687,8 +60740,8 @@ Modules["VM.H"] = function(G)
 				pcall(function()
 					X.bind(_, "Search")
 				end)
-				_.BackgroundColor3 = Color3.fromHex("FF8B26")
-				_.TextColor3 = Color3.fromHex("FFF7EB")
+				_.BackgroundColor3 = Color3.fromHex("A855F7")
+				_.TextColor3 = Color3.fromHex("F5E8FF")
 				a(_.MouseEnter, function()
 					F(_, 0.14, { BackgroundTransparency = 0.12 })
 				end)
@@ -60737,11 +60790,11 @@ Modules["VM.H"] = function(G)
 				local function s(Y, l)
 					Y = tostring(Y)
 					r = r + 1
-					local x = A("Frame", { BackgroundColor3 = Color3.fromHex("28221B"), BorderSizePixel = 0, LayoutOrder = r }, q)
+                    local x = A("Frame", { BackgroundColor3 = Color3.fromHex("111216"), BorderSizePixel = 0, LayoutOrder = r }, q)
 					J(x, 10)
 					x:SetAttribute("_skinSkip", true)
 					B(x, "BackgroundColor3", "card")
-					x.BackgroundColor3 = Color3.fromHex("28221B")
+                    x.BackgroundColor3 = Color3.fromHex("111216")
 					local S = A(
 						"UIStroke",
 						{ Thickness = 1, Transparency = 0.9, ApplyStrokeMode = Enum.ApplyStrokeMode.Border },
@@ -60753,7 +60806,7 @@ Modules["VM.H"] = function(G)
 					local y = A("ImageButton", {
 						Size = UDim2.new(1, -12.0, 1, -46.0),
 						Position = UDim2.fromOffset(6, 6),
-						BackgroundColor3 = Color3.fromHex("14120F"),
+                        BackgroundColor3 = Color3.fromHex("08090B"),
 						BorderSizePixel = 0,
 						AutoButtonColor = false,
 						Image = k,
@@ -60762,7 +60815,7 @@ Modules["VM.H"] = function(G)
 					J(y, 8)
 					y:SetAttribute("_skinSkip", true)
 					B(y, "BackgroundColor3", "prev")
-					y.BackgroundColor3 = Color3.fromHex("14120F")
+                    y.BackgroundColor3 = Color3.fromHex("08090B")
 					local k = A("TextButton", {
 						AnchorPoint = Vector2.new(0, 1),
 						Size = UDim2.new(1, -16.0, 0, 34),
@@ -60783,7 +60836,7 @@ Modules["VM.H"] = function(G)
 						k.FontFace = V.Font.Semi()
 					end)
 					B(k, "TextColor3", "txt")
-					k.TextColor3 = Color3.fromHex("FFF1DE")
+                    k.TextColor3 = Color3.fromHex("F2F3F6")
 					if W == "bundle" and c then
 						c(Y, l)
 					end
@@ -60821,7 +60874,7 @@ Modules["VM.H"] = function(G)
 					local F = A("TextButton", {
 						Position = UDim2.new(1, -60.0, 0, 10),
 						Size = UDim2.fromOffset(24, 18),
-						BackgroundColor3 = Color3.fromHex("28221B"),
+                        BackgroundColor3 = Color3.fromHex("111216"),
 						BackgroundTransparency = 0.15,
 						Font = Enum.Font.GothamBold,
 						Text = "ID",
@@ -60834,8 +60887,8 @@ Modules["VM.H"] = function(G)
 					F:SetAttribute("_skinSkip", true)
 					B(F, "BackgroundColor3", "card")
 					B(F, "TextColor3", "txt")
-					F.BackgroundColor3 = Color3.fromHex("38291C")
-					F.TextColor3 = Color3.fromHex("FFF1DE")
+                    F.BackgroundColor3 = Color3.fromHex("1B1624")
+                    F.TextColor3 = Color3.fromHex("F2F3F6")
 					a(F.MouseButton1Click, function()
 						local F = setclipboard
 							or toclipboard
@@ -60850,7 +60903,7 @@ Modules["VM.H"] = function(G)
 					local V = A("TextButton", {
 						Position = UDim2.new(1, -32.0, 0, 10),
 						Size = UDim2.fromOffset(22, 18),
-						BackgroundColor3 = Color3.fromHex("38291C"),
+                        BackgroundColor3 = Color3.fromHex("1B1624"),
 						BackgroundTransparency = 0.15,
 						Font = Enum.Font.GothamBold,
 						Text = F and "★" or "☆",
@@ -60862,8 +60915,8 @@ Modules["VM.H"] = function(G)
 					J(V, 6)
 					V:SetAttribute("_skinSkip", true)
 					B(V, "BackgroundColor3", "card")
-					V.BackgroundColor3 = Color3.fromHex("38291C")
-					V.TextColor3 = F and Color3.fromHex("FFD166") or Color3.fromHex("FFF1DE")
+                    V.BackgroundColor3 = Color3.fromHex("1B1624")
+                    V.TextColor3 = F and Color3.fromHex("D8B4FE") or Color3.fromHex("F2F3F6")
 					a(V.MouseButton1Click, function()
 						if t.config.favorites[Y] then
 							t.config.favorites[Y] = nil
@@ -68975,23 +69028,44 @@ Modules["VM.J"] = function(G)
 					end)
 					V.say(string.format("start L=%.3f sd=%.3f D=%.3f", V.L, V.Lsd, V.D))
 				end
-				V.start(F)
+				-- AimX/V4 is retired. Keep the compatibility object available for
+				-- guarded legacy references, but never start its worker or connections.
+				V.alive = false
 			end
 			local function V(r, _, q)
-				if X.sheriff.aimVer == "V4" then
-					local h = rawget(getgenv(), "__pulseAimX")
-					if h and h.alive then
-						return h.fireFor(r, q == true, not X.sheriff.wallbang)
-					end
-				end
 				local h = t()
 				local Y = h and h:FindFirstChild("Shoot")
 				if not Y then
 					return false
 				end
+				local function directFallback()
+					-- V3 can legitimately have no plan during the first frames of a
+					-- round. For manual shots, retain V2's reliable direct shot rather
+					-- than silently discarding the click. Auto-fire stays plan-gated.
+					if not q or not r or not r.Parent then return false end
+					local targetRoot = r:FindFirstChild("HumanoidRootPart")
+					local myRoot = U()
+					local humanoid = r:FindFirstChildOfClass("Humanoid")
+					if not targetRoot or not myRoot or not humanoid or humanoid.Health <= 0 then return false end
+					if not X.sheriff.wallbang and type(V.visible) == "function" and not V.visible(r) then return false end
+					local lead = 0.16
+					pcall(function() lead = math.clamp(E:GetNetworkPing() + 0.16, 0, 0.3) end)
+					local velocity = targetRoot.AssemblyLinearVelocity or Vector3.zero
+					local aim = targetRoot.Position + Vector3.new(velocity.X, 0, velocity.Z) * lead
+					local attachment = myRoot:FindFirstChild("GunRaycastAttachment")
+					local origin = attachment and attachment.WorldCFrame or myRoot.CFrame
+					local state = getgenv().__pulseAim or {}
+					state.bypass = true
+					local ok = pcall(function()
+						Y:FireServer(origin, CFrame.new(aim))
+					end)
+					state.bypass = false
+					getgenv().__pulseAim = state
+					return ok
+				end
 				local h = k(r, q)
 				if not (h and h.ok) then
-					return false
+					return directFallback()
 				end
 				local S = r and r:FindFirstChildOfClass("Humanoid")
 				if not (r.Parent and S and S.Health > 0 and t()) then
@@ -69385,7 +69459,7 @@ Modules["VM.J"] = function(G)
 					if X.sheriff.aimType ~= "Universal" then
 						return
 					end
-					if X.sheriff.aimVer == "V2" then
+					if X.sheriff.aimVer ~= "V3" then
 						return
 					end
 					if not L() then
@@ -70726,8 +70800,9 @@ local Window = Nova:CreateWindow({
     -- Replace Initial with a different short label, or set Logo to "rbxassetid://<image-id>" for a custom image.
     Title = "Less", Subtitle = "Murder Mystery 2", Initial = "L", Logo = "rbxthumb://type=Asset&id=8652665149&w=150&h=150", GuiName = "Less",
     Key = Enum.KeyCode.G, Size = Vector2.new(920, 650), MinSize = Vector2.new(680, 500), SidebarWidth = 204,
-    Accent = Color3.fromHex("FF8B26"), Base = "Midnight", Background = "Plain", Opacity = 0.88,
-    Parent = Host, StateFile = "LessNova/nova/window.json", Launcher = true, Blur = false,
+    Accent = Color3.fromHex("A855F7"), Base = "Amoled", Background = "Plain", Opacity = 0.88,
+    -- Versioned UI state prevents old Nova layouts from poisoning startup.
+    Parent = Host, StateFile = "LessNova/nova/window_v2.json", Launcher = true, Blur = false,
 })
 -- Apply the compact Pulse-style layout once while preserving later user resizing.
 if Window.State.get("lessPulseCompactV1", false) ~= true then
@@ -70745,12 +70820,12 @@ if Window.State.get("lessPulseCompactV1", false) ~= true then
     Window.State.save()
 end
 Nova.Theme.setMany({
-    Background = Color3.fromHex("050507"), Sidebar = Color3.fromHex("11110E"),
-    Surface = Color3.fromHex("1D1A16"), Surface2 = Color3.fromHex("27211C"),
-    Elevated = Color3.fromHex("33271D"), Line = Color3.fromHex("5A3B25"),
-    Accent = Color3.fromHex("FF8B26"), Warning = Color3.fromHex("FFC06B"),
-    Success = Color3.fromHex("B8D953"), Text = Color3.fromHex("FFF1DE"),
-    Muted = Color3.fromHex("B6B0A5"), Faint = Color3.fromHex("827B70"),
+    Background = Color3.fromHex("000000"), Sidebar = Color3.fromHex("040405"),
+    Surface = Color3.fromHex("0B0C0E"), Surface2 = Color3.fromHex("111216"),
+    Elevated = Color3.fromHex("181A1F"), Line = Color3.fromHex("29213A"),
+    Accent = Color3.fromHex("A855F7"), Warning = Color3.fromHex("D8B4FE"),
+    Success = Color3.fromHex("C4B5FD"), Text = Color3.fromHex("F2F3F6"),
+    Muted = Color3.fromHex("8F94A1"), Faint = Color3.fromHex("545965"),
 })
 local function Notify(message, title, kind)
     if not alive then return end
@@ -70769,7 +70844,7 @@ function route.novaResolve(tab, sub, title)
     return tab, sub, title ~= "*" and title or nil
 end
 local paletteMap = { accent = "Accent", bg = "Background", card = "Surface", card2 = "Surface2", text = "Text", muted = "Muted", line = "Line", danger = "Danger" }
-UI.Slate = { Theme = setmetatable({ refreshHooks = config.refreshHooks, accent = Color3.fromHex("FF8B26") }, {
+ UI.Slate = { Theme = setmetatable({ refreshHooks = config.refreshHooks, accent = Color3.fromHex("A855F7") }, {
     __index = function(_, key) return Nova.Theme.resolve(paletteMap[key] or "Muted") end,
 }) }
 local adaptTab = Modules["VM.M"]({
@@ -70826,7 +70901,13 @@ Private.__pulseNovaLangHooks = {} -- Legacy text-refresh callbacks; no language 
 Private.__pulseBindFromName = function(value)
     if typeof(value) == "EnumItem" then return value end
     if type(value) ~= "string" or value == "" or value == "None" then return nil end
-    return Enum.KeyCode[value] or Enum.UserInputType[value]
+    -- Mouse buttons belong to UserInputType, not KeyCode. Indexing an enum
+    -- with an invalid member throws, so probe both enums safely.
+    local function resolve(enum)
+        local ok, item = pcall(function() return enum[value] end)
+        return ok and typeof(item) == "EnumItem" and item or nil
+    end
+    return resolve(Enum.KeyCode) or resolve(Enum.UserInputType)
 end
 Private.__pulseBindHit = function(input, key)
     return key and (input.KeyCode == key or input.UserInputType == key) or false
@@ -70883,7 +70964,112 @@ local function Visible(target, origin)
     local from = origin or myRoot.Position
     return World:Raycast(from, root.Position - from, ray) == nil
 end
+-- Legacy aim path kept isolated from the V2/V3 pipeline. This mirrors Less_OLD:
+-- murderer-only target selection, UpperTorso fallback, direct camera aim and
+-- direct Shoot:FireServer calls. It is deliberately disabled unless OLD is selected.
+local legacyAim = { connection=nil, clickConnection=nil, busy=false }
+legacyAim.disabled = {}
+function legacyAim.restoreNormal()
+    for _, connection in ipairs(legacyAim.disabled) do pcall(function() connection:Enable() end) end
+    table.clear(legacyAim.disabled)
+end
+function legacyAim.disableNormal()
+    legacyAim.restoreNormal()
+    if type(getconnections) ~= "function" then return end
+    local character = LocalPlayer.Character
+    local gun = character and character:FindFirstChild("Gun")
+    local activated = gun and gun:FindFirstChild("Activated")
+    if not activated then return end
+    pcall(function()
+        for _, connection in ipairs(getconnections(activated)) do
+            if connection and connection.Disable then connection:Disable(); legacyAim.disabled[#legacyAim.disabled + 1] = connection end
+        end
+    end)
+end
+local function legacyTarget()
+    local target = rolePlayer("Murderer")
+    local character = target and target.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not target or target == LocalPlayer or not character or not humanoid or humanoid.Health <= 0 then return nil end
+    local part = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+        or character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head")
+    if not part then return nil end
+    local camera = World.CurrentCamera
+    if not camera then return nil end
+    local fov = fovSettings and fovSettings() or settings.sheriff.fov
+    local radius = type(fov) == "table" and (fov.on and fov.size or 500) or 500
+    local point, visible = camera:WorldToViewportPoint(part.Position)
+    if not visible or (radius < 500 and (Vector2.new(point.X, point.Y) - camera.ViewportSize / 2).Magnitude > radius) then return nil end
+    if not settings.sheriff.wallbang and not Visible(target) then return nil end
+    return target, part
+end
+local function legacyPosition(part)
+    local myRoot = Root()
+    if not myRoot or not part then return nil end
+    local target = part.Parent
+    local humanoid = target and target:FindFirstChildOfClass("Humanoid")
+    local velocity
+    if humanoid and humanoid.MoveDirection.Magnitude > 0.1 then
+        velocity = humanoid.MoveDirection.Unit * humanoid.WalkSpeed
+    else
+        velocity = part.AssemblyLinearVelocity or Vector3.zero
+    end
+    if velocity.Magnitude < 0.5 then return part.Position end
+    -- Same lead model as Less_OLD: ping + 0.16, capped at 0.3 seconds.
+    local ping = 0
+    pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+    local lead = math.clamp(ping + 0.16, 0, 0.3)
+    local offset = Vector3.new(velocity.X, 0, velocity.Z) * lead
+    if offset.Magnitude > 8 then offset = offset.Unit * 8 end
+    return part.Position + offset
+end
+function legacyAim.shoot()
+    if legacyAim.busy then return false end
+    local target, part = legacyTarget()
+    local myRoot = Root()
+    if not target or not part or not myRoot or (part.Position - myRoot.Position).Magnitude > 300 then return false end
+    local gun = Equip("Gun")
+    local remote = gun and gun:FindFirstChild("Shoot")
+    local position = legacyPosition(part)
+    if not remote or not remote:IsA("RemoteEvent") or not position then return false end
+    local attachment = myRoot:FindFirstChild("GunRaycastAttachment")
+    local origin = attachment and attachment.WorldCFrame or myRoot.CFrame
+    legacyAim.busy = true
+    local aimState = getgenv().__pulseAim or {}
+    aimState.bypass = true
+    local ok = pcall(function() remote:FireServer(origin, CFrame.new(position)) end)
+    aimState.bypass = false
+    getgenv().__pulseAim = aimState
+    legacyAim.busy = false
+    if ok then less.lastShot = os.clock() end
+    return ok
+end
+function legacyAim.stop()
+    if legacyAim.connection then pcall(function() legacyAim.connection:Disconnect() end); legacyAim.connection=nil end
+    if legacyAim.clickConnection then pcall(function() legacyAim.clickConnection:Disconnect() end); legacyAim.clickConnection=nil end
+    legacyAim.restoreNormal()
+end
+function legacyAim.refresh()
+    legacyAim.stop()
+    if settings.sheriff.aimVer ~= "OLD" then return end
+    if settings.sheriff.aimType == "Universal" then
+        legacyAim.connection = RunService.RenderStepped:Connect(function()
+            if not settings.sheriff.silentAim then
+                local _, part = legacyTarget()
+                local camera, position = World.CurrentCamera, part and legacyPosition(part)
+                if camera and position then pcall(function() camera.CFrame = CFrame.new(camera.CFrame.Position, position) end) end
+            end
+        end)
+    end
+    if settings.sheriff.silentAim or settings.sheriff.aimType == "Flick Shot" then
+        legacyAim.clickConnection = LocalPlayer:GetMouse().Button1Down:Connect(function()
+            if settings.sheriff.silentAim then legacyAim.disableNormal() end
+            pcall(legacyAim.shoot)
+        end)
+    end
+end
 function less.shoot()
+    if settings.sheriff.aimVer == "OLD" then return legacyAim.shoot() end
     if os.clock() - less.lastShot < 0.35 then return false end
     local target = rolePlayer("Murderer"); local root, myRoot = Root(target), Root()
     if not target or target == LocalPlayer or not root or not myRoot then return false end
@@ -70960,6 +71146,7 @@ function less.throw()
     remote:FireServer(myRoot.CFrame, CFrame.new(nearest.Position + nearest.AssemblyLinearVelocity * 0.1))
     less.lastThrow = os.clock(); return true
 end
+OnCleanup(function() legacyAim.stop() end)
 Private.__pulseShotMurder, Private.__pulseThrowKnife = less.shoot, less.throw
 
 -- Explicit dependency maps replace the original VM/upvalue wiring.
@@ -70978,6 +71165,12 @@ Start("teleport", { [0]=Text,[1]=LocalPlayer,[2]=UI,[3]=roles }, "S")
 Start("troll_fun", { [0]=Connect,[1]=Host,[2]=Make,[3]=Round,[4]=settings,[5]=UI,[6]=Text,[7]=Alive,[8]=config,[9]=OnCleanup,[10]=Input,[11]=roles,[12]=Stroke,[13]=Tween,[14]=Movement }, "K")
 Start("fling", { [0]=settings,[1]=Text,[2]=OnCleanup,[3]=UI,[4]=Alive,[5]=defaults,[6]=Input,[7]=Connect,[8]=config }, "O")
 Start("aim", { [0]=settings,[1]=Services.ReplicatedStorage,[2]=LocalPlayer,[3]=Alive,[4]=roles,[5]=function()return rolePlayer("Murderer")end,[6]=Connect,[7]=Players,[8]=Host }, "VM.J")
+-- Keep the supported V2/V3 implementation, but stop the retired AimX worker.
+do
+    local aimx = rawget(getgenv(), "__pulseAimX")
+    if aimx and type(aimx.stop) == "function" then pcall(aimx.stop) end
+    getgenv().__pulseAimX = nil
+end
 Start("anti_aim", { [0]=Connect,[1]=nil,[2]=LocalPlayer,[3]=BindRender,[4]=Input,[5]=Players,[6]=roles,[7]=settings,[8]=OnCleanup }, "y")
 Start("tracers", { [0]=LocalPlayer,[1]=Text,[2]=Combat,[3]=Alive,[4]=Host,[5]=settings,[6]=OnCleanup,[7]=Connect }, "P")
 Start("knife", { [0]=Text,[1]=LocalPlayer,[2]=Alive,[3]=Murder,[4]=roles,[5]=Services.ReplicatedStorage,[6]=Connect,[7]=Host,[8]=OnCleanup }, "_")
@@ -71028,20 +71221,26 @@ end
 local fov = fovSettings()
 local function aimHookEnabled()
     local sheriff = settings.sheriff
-    return sheriff.silentAim == true or (sheriff.aimType == "Flick Shot" and sheriff.aimVer ~= "V2")
+    return sheriff.aimVer ~= "OLD" and (sheriff.silentAim == true or (sheriff.aimType == "Flick Shot" and sheriff.aimVer ~= "V2"))
 end
 local function choice(tab, text, field, values, changed)
     local options = {}; for _, value in ipairs(values) do options[#options+1]={code=value,label=value} end
     return tab:Dropdown({ Text=text, Default=settings.sheriff[field], Options=options, Callback=function(v) settings.sheriff[field]=v; if changed then changed(v) end end })
 end
 choice(Combat, "Aim mode", "aimType", { "Universal", "Flick Shot" }, function()
+    legacyAim.refresh()
     local aim = Private.__pulseAim
     if aim then
         aim.on = aimHookEnabled()
         if aim.on and aim.installHook then pcall(aim.installHook) end
     end
 end)
-choice(Combat, "Aim version", "aimVer", { "V2", "V3", "V4" }, function()
+choice(Combat, "Aim version", "aimVer", { "V2", "V3", "OLD" }, function(v)
+    if v == "V4" then
+        v = "V3"
+        settings.sheriff.aimVer = v
+    end
+    legacyAim.refresh()
     local aim = Private.__pulseAim
     if aim then
         aim.on = aimHookEnabled()
@@ -71050,6 +71249,7 @@ choice(Combat, "Aim version", "aimVer", { "V2", "V3", "V4" }, function()
 end)
 Combat:Toggle({ Text = "Silent Aim", NoSave=true, Default=false, Callback=function(v)
     settings.sheriff.silentAim=v
+    legacyAim.refresh()
     local aim=Private.__pulseAim
     if aim then
         aim.on = aimHookEnabled()
@@ -71074,7 +71274,12 @@ drawFov.animation = drawFov.animation or "Static"
 drawFov.rainbow = drawFov.rainbow == true
 drawFov.thickness = math.clamp(tonumber(drawFov.thickness) or 2, 1, 6)
 drawFov.opacity = math.clamp(tonumber(drawFov.opacity) or 85, 10, 100)
-drawFov.color = typeof(drawFov.color) == "Color3" and drawFov.color or Color3.fromRGB(255, 139, 38)
+if typeof(drawFov.color) ~= "Color3" then
+    drawFov.color = Color3.fromHex("A855F7")
+elseif drawFov.color.R > 0.9 and drawFov.color.G > 0.35 and drawFov.color.G < 0.7 and drawFov.color.B < 0.25 then
+    -- Migrate the previous orange default without changing user-selected colors.
+    drawFov.color = Color3.fromHex("A855F7")
+end
 
 local drawFovApi
 local drawFovObjects = {}
@@ -71196,8 +71401,8 @@ Combat:Slider({ Text="Flick Return", Min=0, Max=100, Default=settings.sheriff.fl
 Combat:Toggle({ Text = "Flick Mouse", Default=settings.sheriff.flickMouse ~= false, Callback=function(v) settings.sheriff.flickMouse=v end })
 Combat:Dropdown({ Text="Shot Timing", Default=(settings.sheriff.shotTiming == "Instant" or settings.sheriff.shotTiming == true) and "Instant" or "Off", Options={{code="Off",label="Off"},{code="Instant",label="Instant"}}, Callback=function(v)
     settings.sheriff.shotTiming = v == "Instant" and "Instant" or false
-    local aimx = getgenv().__pulseAimX
-    if aimx and aimx.applyTiming then pcall(aimx.applyTiming) end
+    local aimV3 = rawget(getgenv(), "__pulseAimV3")
+    if aimV3 and type(aimV3.applyTiming) == "function" then pcall(aimV3.applyTiming) end
 end })
 Combat:Toggle({ Text = "PBlank", Default=false, Callback=function(v) settings.sheriff.pblank=v end })
 Murder:Group({ Title = "Murder", Side = "Left" })
@@ -71232,6 +71437,7 @@ local function applyConfig(data, startup)
     settings.ui=settings.ui or {}
     settings.ui.stretch=math.clamp(tonumber(settings.ui.stretch)or 0,0,35)
     if type(settings.sheriff) ~= "table" then settings.sheriff = {} end
+    if settings.sheriff.aimVer == "V4" then settings.sheriff.aimVer = "V3" end
     if settings.sheriff.shotTiming == true then settings.sheriff.shotTiming = "Instant" end
     fovSettings()
     local aim = getgenv().__pulseAim
@@ -71239,8 +71445,6 @@ local function applyConfig(data, startup)
         aim.on = aimHookEnabled()
         if aim.on and aim.installHook then pcall(aim.installHook) end
     end
-    local aimx = getgenv().__pulseAimX
-    if aimx and aimx.applyTiming then pcall(aimx.applyTiming) end
     for key,value in pairs(settings.mobile) do if type(value)=="boolean" then settings.mobile[key]=false end end
     for key,value in pairs(data.controls or {}) do
         if not (tostring(key):match("^Buttons/") and tostring(key):match(" Button#?%d*$")) then
@@ -75727,9 +75931,9 @@ do
         Callback=function(value)Window:SetWatermark(value)end})
     local gui=Make("ScreenGui",{Name="LessNovaRoundHUD",ResetOnSpawn=false,IgnoreGuiInset=false,DisplayOrder=100},Host)
     local label=Make("TextLabel",{Name="RoundTime",AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,12),
-        Size=UDim2.fromOffset(170,32),BackgroundColor3=Color3.fromHex("1D1A16"),BackgroundTransparency=0.12,
-        TextColor3=Color3.fromHex("FFC06B"),TextSize=16,Font=Enum.Font.GothamBold,Text="Lobby",Visible=false},gui)
-    Round(label,10);Stroke(label,Color3.fromHex("FF8A24"),1,0.25)
+        Size=UDim2.fromOffset(170,32),BackgroundColor3=Color3.fromHex("0B0C0E"),BackgroundTransparency=0.12,
+        TextColor3=Color3.fromHex("D8B4FE"),TextSize=16,Font=Enum.Font.GothamBold,Text="Lobby",Visible=false},gui)
+    Round(label,10);Stroke(label,Color3.fromHex("A855F7"),1,0.25)
     local function updateRound()
         label.Visible=settings.hud.round==true
         if not label.Visible then return end
@@ -75778,7 +75982,7 @@ do
         local card=cursorGrid:Card({Name=name})
         local button=Make("TextButton",{Name="Preview",Text="",AutoButtonColor=true,BackgroundTransparency=1,Size=UDim2.fromScale(1,1),LayoutOrder=index},card.card)
         Make("ImageLabel",{BackgroundTransparency=1,Image=Private.LessCursors[name]or"",Position=UDim2.new(0.5,-22,0,4),Size=UDim2.fromOffset(44,44),ScaleType=Enum.ScaleType.Fit},button)
-        Make("TextLabel",{BackgroundTransparency=1,Text=name,TextWrapped=true,Font=Enum.Font.Gotham,TextSize=10,TextColor3=Color3.fromHex("FFF1DE"),Position=UDim2.new(0,2,1,-29),Size=UDim2.new(1,-4,0,25)},button)
+        Make("TextLabel",{BackgroundTransparency=1,Text=name,TextWrapped=true,Font=Enum.Font.Gotham,TextSize=10,TextColor3=Color3.fromHex("F2F3F6"),Position=UDim2.new(0,2,1,-29),Size=UDim2.new(1,-4,0,25)},button)
         Connect(button.Activated,function()cursorPicker.Set(name)end)
     end
     Connect(RunService.RenderStepped,function(dt)
@@ -75802,11 +76006,11 @@ do
     -- Keep this field readable even when the active Nova theme has low-contrast defaults.
     if searchInput.Box then
         local box=searchInput.Box
-        box.TextColor3=Color3.fromHex("FFF1DE")
+        box.TextColor3=Color3.fromHex("F2F3F6")
         box.PlaceholderColor3=Color3.fromHex("B6B0A5")
         box.TextTransparency=0
         local field=box.Parent
-        if field then field.BackgroundColor3=Color3.fromHex("211C17");field.BackgroundTransparency=0.08 end
+        if field then field.BackgroundColor3=Color3.fromHex("111216");field.BackgroundTransparency=0.08 end
     end
     local grid=tab:Grid({Columns=7,Height=104,Gap=6})
     local tiles={}
@@ -76248,11 +76452,11 @@ do
     tab:Header("Map Vote Assistant")
     cfg.repeatCount=math.clamp(math.floor(tonumber(cfg.repeatCount)or 10),1,10)
     local gui=Make("ScreenGui",{Name="LessMapVoteFloat",ResetOnSpawn=false,IgnoreGuiInset=true,DisplayOrder=10020,Enabled=true},Host)
-    local panel=Make("Frame",{Name="MapVote",AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,88),Size=UDim2.fromOffset(372,210),BackgroundColor3=Color3.fromHex("1D1A16"),BorderSizePixel=0,Visible=false,Active=true},gui)
-    Round(panel,12);Stroke(panel,Color3.fromHex("FF8A24"),1.5,0.15)
-    local title=Make("TextLabel",{Name="Title",BackgroundTransparency=1,Position=UDim2.fromOffset(12,6),Size=UDim2.new(1,-24,0,24),Font=Enum.Font.GothamBold,TextSize=15,TextXAlignment=Enum.TextXAlignment.Left,TextColor3=Color3.fromHex("FFF1DE"),Text="Map Vote"},panel)
+    local panel=Make("Frame",{Name="MapVote",AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,88),Size=UDim2.fromOffset(372,210),BackgroundColor3=Color3.fromHex("0B0C0E"),BorderSizePixel=0,Visible=false,Active=true},gui)
+    Round(panel,12);Stroke(panel,Color3.fromHex("A855F7"),1.5,0.15)
+    local title=Make("TextLabel",{Name="Title",BackgroundTransparency=1,Position=UDim2.fromOffset(12,6),Size=UDim2.new(1,-24,0,24),Font=Enum.Font.GothamBold,TextSize=15,TextXAlignment=Enum.TextXAlignment.Left,TextColor3=Color3.fromHex("F2F3F6"),Text="Map Vote"},panel)
     local status=Make("TextLabel",{Name="Status",BackgroundTransparency=1,Position=UDim2.fromOffset(12,31),Size=UDim2.new(1,-24,0,17),Font=Enum.Font.Gotham,TextSize=11,TextXAlignment=Enum.TextXAlignment.Left,TextColor3=Color3.fromHex("B6B0A5"),Text="Waiting for map voting…"},panel)
-    local close=Make("TextButton",{Name="Close",AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-8,0,7),Size=UDim2.fromOffset(24,22),BackgroundTransparency=1,Text="×",Font=Enum.Font.GothamBold,TextSize=20,TextColor3=Color3.fromHex("FFC06B")},panel)
+    local close=Make("TextButton",{Name="Close",AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-8,0,7),Size=UDim2.fromOffset(24,22),BackgroundTransparency=1,Text="×",Font=Enum.Font.GothamBold,TextSize=20,TextColor3=Color3.fromHex("D8B4FE")},panel)
     Connect(close.Activated,function()cfg.panel=false;panel.Visible=false end)
     local cards={}
     local selected=1
@@ -76352,11 +76556,11 @@ do
         end)
     end
     for index=1,3 do
-        local card=Make("TextButton",{Name="Map"..index,Position=UDim2.fromOffset(10+(index-1)*118,58),Size=UDim2.fromOffset(112,136),BackgroundColor3=Color3.fromHex("27211C"),BorderSizePixel=0,Text="",AutoButtonColor=true,Visible=false},panel)
-        Round(card,9);local outline=Stroke(card,Color3.fromHex("5A3B25"),1,0.1)
-        local image=Make("ImageLabel",{Name="MapImage",Position=UDim2.fromOffset(5,5),Size=UDim2.new(1,-10,0,74),BackgroundColor3=Color3.fromHex("14120F"),BorderSizePixel=0,Image="",ScaleType=Enum.ScaleType.Crop},card);Round(image,6)
-        local name=Make("TextLabel",{Name="MapName",Position=UDim2.fromOffset(5,83),Size=UDim2.new(1,-10,0,28),BackgroundTransparency=1,Text="—",TextWrapped=true,Font=Enum.Font.GothamBold,TextSize=12,TextColor3=Color3.fromHex("FFF1DE")},card)
-        local details=Make("TextLabel",{Name="Votes",Position=UDim2.fromOffset(5,112),Size=UDim2.new(1,-10,0,17),BackgroundTransparency=1,Text="",Font=Enum.Font.Gotham,TextSize=10,TextColor3=Color3.fromHex("FFC06B")},card)
+        local card=Make("TextButton",{Name="Map"..index,Position=UDim2.fromOffset(10+(index-1)*118,58),Size=UDim2.fromOffset(112,136),BackgroundColor3=Color3.fromHex("111216"),BorderSizePixel=0,Text="",AutoButtonColor=true,Visible=false},panel)
+        Round(card,9);local outline=Stroke(card,Color3.fromHex("29213A"),1,0.1)
+        local image=Make("ImageLabel",{Name="MapImage",Position=UDim2.fromOffset(5,5),Size=UDim2.new(1,-10,0,74),BackgroundColor3=Color3.fromHex("08090B"),BorderSizePixel=0,Image="",ScaleType=Enum.ScaleType.Crop},card);Round(image,6)
+        local name=Make("TextLabel",{Name="MapName",Position=UDim2.fromOffset(5,83),Size=UDim2.new(1,-10,0,28),BackgroundTransparency=1,Text="—",TextWrapped=true,Font=Enum.Font.GothamBold,TextSize=12,TextColor3=Color3.fromHex("F2F3F6")},card)
+        local details=Make("TextLabel",{Name="Votes",Position=UDim2.fromOffset(5,112),Size=UDim2.new(1,-10,0,17),BackgroundTransparency=1,Text="",Font=Enum.Font.Gotham,TextSize=10,TextColor3=Color3.fromHex("D8B4FE")},card)
         cards[index]={frame=card,stroke=outline,image=image,name=name,details=details}
         Connect(card.Activated,function()vote(index)end)
     end
@@ -76392,7 +76596,7 @@ do
             local map=readMap(index);local item=cards[index]
             if map and map.active then
                 count+=1;item.frame.Visible=true;item.image.Image=map.icon;item.name.Text=map.name;item.details.Text=tostring(map.votes).." votes"..(map.mode~="" and (" · "..map.mode)or"")
-                item.stroke.Color=(index==selected or map.name==cfg.favorite)and Color3.fromHex("FF8A24")or Color3.fromHex("5A3B25")
+                item.stroke.Color=(index==selected or map.name==cfg.favorite)and Color3.fromHex("A855F7")or Color3.fromHex("29213A")
             else item.frame.Visible=false end
         end
         local inRound=roundInProgress()
@@ -77778,13 +77982,13 @@ end)()
         return previewAssets[n] or ""
     end
     local function card(entry,index)
-        local holder=Instance.new("Frame"); holder.Name="AuraCard_"..entry.key; holder.Size=UDim2.new(0,108,0,86); holder.BackgroundColor3=Color3.fromRGB(34,29,23); holder.BorderSizePixel=0; holder.ClipsDescendants=true; holder.LayoutOrder=index; holder.Parent=previewRoot; Round(holder,12); local cardStroke=Stroke(holder,Color3.fromRGB(154,95,48),1,0.8)
-        local image=Instance.new("ImageButton"); image.Name="Preview"; image.Size=UDim2.fromScale(1,1); image.Position=UDim2.fromScale(0,0); image.BackgroundColor3=Color3.fromRGB(17,15,13); image.BorderSizePixel=0; image.AutoButtonColor=false; image.ZIndex=1
+        local holder=Instance.new("Frame"); holder.Name="AuraCard_"..entry.key; holder.Size=UDim2.new(0,108,0,86); holder.BackgroundColor3=Color3.fromRGB(11,12,14); holder.BorderSizePixel=0; holder.ClipsDescendants=true; holder.LayoutOrder=index; holder.Parent=previewRoot; Round(holder,12); local cardStroke=Stroke(holder,Color3.fromRGB(41,33,58),1,0.8)
+        local image=Instance.new("ImageButton"); image.Name="Preview"; image.Size=UDim2.fromScale(1,1); image.Position=UDim2.fromScale(0,0); image.BackgroundColor3=Color3.fromRGB(5,5,7); image.BorderSizePixel=0; image.AutoButtonColor=false; image.ZIndex=1
         local atlas=math.floor((index-1)/64)+1; local slot=(index-1)%64; image.Image=previewAsset(atlas); image.ImageRectOffset=Vector2.new((slot%8)*128,math.floor(slot/8)*128); image.ImageRectSize=Vector2.new(128,128); image.Parent=holder
         local shade=Instance.new("Frame"); shade.Name="TitleShade"; shade.AnchorPoint=Vector2.new(0,1); shade.Position=UDim2.new(0,5,1,-5); shade.Size=UDim2.new(1,-10,0,22); shade.BackgroundColor3=Color3.new(0,0,0); shade.BackgroundTransparency=0.35; shade.BorderSizePixel=0; shade.ZIndex=3; shade.Parent=holder; Round(shade,7)
-        local label=Instance.new("TextLabel"); label.Name="Title"; label.BackgroundTransparency=1; label.Position=UDim2.fromOffset(7,0); label.Size=UDim2.new(1,-12,1,0); label.Font=Enum.Font.GothamMedium; label.Text=entry.name; label.TextColor3=Color3.fromRGB(255,245,232); label.TextSize=11; label.TextXAlignment=Enum.TextXAlignment.Left; label.TextTruncate=Enum.TextTruncate.AtEnd; label.ZIndex=4; label.Parent=shade
-        local selectedDot=Instance.new("Frame"); selectedDot.Name="SelectedDot"; selectedDot.AnchorPoint=Vector2.new(1,0); selectedDot.Position=UDim2.new(1,-7,0,7); selectedDot.Size=UDim2.fromOffset(10,10); selectedDot.BackgroundColor3=Color3.fromRGB(255,139,38); selectedDot.BackgroundTransparency=1; selectedDot.BorderSizePixel=0; selectedDot.ZIndex=5; selectedDot.Parent=holder; Round(selectedDot,5); local dotStroke=Stroke(selectedDot,Color3.fromRGB(255,220,170),1,1)
-        cardRefs[entry.category]=cardRefs[entry.category] or {}; table.insert(cardRefs[entry.category],holder); local state=false; local hover=false; local function set(on) holder.BackgroundColor3=on and Color3.fromRGB(83,52,26) or hover and Color3.fromRGB(52,40,29) or Color3.fromRGB(34,29,23); selectedDot.BackgroundTransparency=on and 0 or 1; dotStroke.Transparency=on and 0.15 or 1; cardStroke.Color=on and Color3.fromRGB(255,139,38) or Color3.fromRGB(154,95,48); cardStroke.Thickness=on and 2 or 1; cardStroke.Transparency=on and 0.05 or hover and 0.25 or 0.8 end
+        local label=Instance.new("TextLabel"); label.Name="Title"; label.BackgroundTransparency=1; label.Position=UDim2.fromOffset(7,0); label.Size=UDim2.new(1,-12,1,0); label.Font=Enum.Font.GothamMedium; label.Text=entry.name; label.TextColor3=Color3.fromRGB(242,243,246); label.TextSize=11; label.TextXAlignment=Enum.TextXAlignment.Left; label.TextTruncate=Enum.TextTruncate.AtEnd; label.ZIndex=4; label.Parent=shade
+        local selectedDot=Instance.new("Frame"); selectedDot.Name="SelectedDot"; selectedDot.AnchorPoint=Vector2.new(1,0); selectedDot.Position=UDim2.new(1,-7,0,7); selectedDot.Size=UDim2.fromOffset(10,10); selectedDot.BackgroundColor3=Color3.fromRGB(168,85,247); selectedDot.BackgroundTransparency=1; selectedDot.BorderSizePixel=0; selectedDot.ZIndex=5; selectedDot.Parent=holder; Round(selectedDot,5); local dotStroke=Stroke(selectedDot,Color3.fromRGB(216,180,254),1,1)
+        cardRefs[entry.category]=cardRefs[entry.category] or {}; table.insert(cardRefs[entry.category],holder); local state=false; local hover=false; local function set(on) holder.BackgroundColor3=on and Color3.fromRGB(49,30,70) or hover and Color3.fromRGB(27,23,38) or Color3.fromRGB(11,12,14); selectedDot.BackgroundTransparency=on and 0 or 1; dotStroke.Transparency=on and 0.15 or 1; cardStroke.Color=on and Color3.fromRGB(168,85,247) or Color3.fromRGB(41,33,58); cardStroke.Thickness=on and 2 or 1; cardStroke.Transparency=on and 0.05 or hover and 0.25 or 0.8 end
         toggles[entry.key]={Get=function() return state end,SetSilent=function(v) state=v==true; set(state) end}; image.MouseButton1Click:Connect(function() state=not state; set(state); changed() end); image.MouseEnter:Connect(function() hover=true; set(state) end); image.MouseLeave:Connect(function() hover=false; set(state) end)
     end
     for catalogIndex,entry in ipairs(Library.Catalog) do card(entry,catalogIndex) end
@@ -77796,19 +78000,19 @@ local function showCategory(category)
     for name,list in pairs(cardRefs) do for _,holder in ipairs(list) do holder.Visible=(category=="All" or name==category  ) end end
     for name,chip in pairs(chips) do
         local active=name==category
-        chip.BackgroundColor3=active and Color3.fromRGB(255,139,38) or Color3.fromRGB(45,38,29)
+        chip.BackgroundColor3=active and Color3.fromRGB(168,85,247) or Color3.fromRGB(17,18,22)
         local stroke=chip:FindFirstChildOfClass("UIStroke");if stroke then stroke.Transparency=active and 0.15 or 0.72 end
-        local badge=chip:FindFirstChild("IconBadge");if badge then badge.BackgroundColor3=active and Color3.fromRGB(255,178,88) or Color3.fromRGB(67,50,33) end
-        local label=chip:FindFirstChild("CategoryLabel");if label then label.TextColor3=active and Color3.fromRGB(28,18,12) or Color3.fromRGB(245,239,230) end
+        local badge=chip:FindFirstChild("IconBadge");if badge then badge.BackgroundColor3=active and Color3.fromRGB(216,180,254) or Color3.fromRGB(41,33,58) end
+        local label=chip:FindFirstChild("CategoryLabel");if label then label.TextColor3=active and Color3.fromRGB(25,10,35) or Color3.fromRGB(242,243,246) end
     end
 end
     for categoryIndex,def in ipairs(categoryDefs) do
         local name,icon=def[1],def[2]
-        local chip=Instance.new("TextButton");chip.Name="Filter_"..name;chip.Text="";chip.AutoButtonColor=false;chip.BorderSizePixel=0;chip.BackgroundColor3=Color3.fromRGB(45,38,29);chip.LayoutOrder=categoryIndex;chip.Parent=filterRoot
-    Round(chip,7);Stroke(chip,Color3.fromRGB(154,95,48),1,0.72)
-    local badge=Instance.new("Frame");badge.Name="IconBadge";badge.Position=UDim2.fromOffset(4,5);badge.Size=UDim2.fromOffset(18,18);badge.BorderSizePixel=0;badge.BackgroundColor3=Color3.fromRGB(67,50,33);badge.Parent=chip;Round(badge,6)
+        local chip=Instance.new("TextButton");chip.Name="Filter_"..name;chip.Text="";chip.AutoButtonColor=false;chip.BorderSizePixel=0;chip.BackgroundColor3=Color3.fromRGB(17,18,22);chip.LayoutOrder=categoryIndex;chip.Parent=filterRoot
+    Round(chip,7);Stroke(chip,Color3.fromRGB(41,33,58),1,0.72)
+    local badge=Instance.new("Frame");badge.Name="IconBadge";badge.Position=UDim2.fromOffset(4,5);badge.Size=UDim2.fromOffset(18,18);badge.BorderSizePixel=0;badge.BackgroundColor3=Color3.fromRGB(41,33,58);badge.Parent=chip;Round(badge,6)
     pcall(function()Nova.icon({Parent=badge,Icon=icon,Size=11,Pos=UDim2.fromScale(0.5,0.5),Anchor=Vector2.new(0.5,0.5),Color="Text",Z=2})end)
-    local label=Instance.new("TextLabel");label.Name="CategoryLabel";label.BackgroundTransparency=1;label.Position=UDim2.fromOffset(28,0);label.Size=UDim2.new(1,-32,1,0);label.Font=Enum.Font.GothamMedium;label.Text=name;label.TextSize=10;label.TextXAlignment=Enum.TextXAlignment.Left;label.TextTruncate=Enum.TextTruncate.AtEnd;label.TextColor3=Color3.fromRGB(245,239,230);label.Parent=chip
+    local label=Instance.new("TextLabel");label.Name="CategoryLabel";label.BackgroundTransparency=1;label.Position=UDim2.fromOffset(28,0);label.Size=UDim2.new(1,-32,1,0);label.Font=Enum.Font.GothamMedium;label.Text=name;label.TextSize=10;label.TextXAlignment=Enum.TextXAlignment.Left;label.TextTruncate=Enum.TextTruncate.AtEnd;label.TextColor3=Color3.fromRGB(242,243,246);label.Parent=chip
     chips[name]=chip;chip.MouseButton1Click:Connect(function()showCategory(name)end)
 end
 showCategory("All")
@@ -77915,7 +78119,9 @@ local actions={
 }
 for name in pairs(actions) do
     local actionName=name
-    Keybinds:Keybind({Text=actionName,Default=nil,Callback=function(key)actionKeys[actionName]=key end})
+    pcall(function()
+        Keybinds:Keybind({Text=actionName,Default=nil,Callback=function(key)actionKeys[actionName]=key end})
+    end)
 end
 Connect(Input.InputBegan,function(input,processed)
     if processed or Input:GetFocusedTextBox() then return end
