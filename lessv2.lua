@@ -46,6 +46,112 @@ local function guarded(name, callback, ...)
     if not result[1] then recordError(name, result[2]); return nil end
     return table.unpack(result, 2, result.n)
 end
+-- All local resources live below LessV2. Keep old embedded path strings
+-- compatible without changing GUI names, globals or third-party payloads.
+local Storage = {
+    read=readfile, write=writefile, file=isfile, folder=isfolder, mkdir=makefolder,
+    list=listfiles, remove=delfile, removeFolder=delfolder, rename=renamefile,
+    append=appendfile, asset=getcustomasset,
+}
+function Storage.path(path)
+    if type(path) ~= "string" then return path end
+    path = path:gsub("\\", "/")
+    if path == "LessNova" then return "LessV2" end
+    local relative = path:match("^LessNova/(.*)$")
+    if not relative then return path end
+    if relative == "nova" then return "LessV2/ui" end
+    if relative:sub(1,5) == "nova/" then return "LessV2/ui/" .. relative:sub(6) end
+    if relative:sub(1,8) == "configs/" then return "LessV2/" .. relative end
+    if relative == "config.json" then return "LessV2/configs/animations.json" end
+    if relative == "mm2_knife.json" then return "LessV2/configs/knife.json" end
+    if relative == "diagnostics.json" or relative:match("_log%.txt$") or relative:match("%.jsonl$") or relative == "nova_trace.txt" then
+        return "LessV2/logs/" .. relative
+    end
+    return "LessV2/cache/" .. relative
+end
+function Storage.ensure(path)
+    if not Storage.mkdir then return end
+    local parent = path:match("^(.*)/[^/]+$")
+    if parent and parent ~= "" then
+        Storage.ensure(parent)
+        if not Storage.folder or not Storage.folder(parent) then Storage.mkdir(parent) end
+    end
+end
+function Storage.migrate()
+    if not (Storage.folder and Storage.list and Storage.read and Storage.write and Storage.file) then return end
+    if not Storage.folder("LessNova") then return end
+    local function copy(folder)
+        for _, source in ipairs(Storage.list(folder)) do
+            source = source:gsub("\\", "/")
+            -- Some executors return absolute paths. Do not traverse outside the old root.
+            source = source:match("(LessNova/.*)$") or source
+            assert(source:sub(1,9) == "LessNova/", "Unexpected migration path: " .. source)
+            if Storage.folder(source) then
+                copy(source)
+            else
+                local body = Storage.read(source)
+                local destination = Storage.path(source)
+                if Storage.file(destination) and Storage.read(destination) ~= body then
+                    destination = "LessV2/backups/legacy/" .. source:sub(10)
+                    -- Never overwrite an earlier backup with different contents.
+                    while Storage.file(destination) and Storage.read(destination) ~= body do destination ..= ".previous" end
+                end
+                Storage.ensure(destination)
+                Storage.write(destination, body)
+                assert(Storage.read(destination) == body, "Migration verification failed: " .. source)
+            end
+        end
+    end
+    copy("LessNova")
+    -- Authorized legacy-root removal, only after every source file was verified.
+    assert(Storage.removeFolder, "Migration copied the resources, but this executor cannot delete the old folder.")
+    Storage.removeFolder("LessNova")
+    assert(not Storage.folder("LessNova"), "The executor did not remove the old folder.")
+end
+do
+    local ok, err = pcall(Storage.migrate)
+    if not ok then recordError("storage_migration", err) end
+end
+local readfile = Storage.read and function(path)
+    local destination=Storage.path(path)
+    if destination ~= path and Storage.file and not Storage.file(destination) and Storage.file(path) then
+        return Storage.read(path) -- Preserve access if migration failed or writing is unsupported.
+    end
+    return Storage.read(destination)
+end
+local writefile = Storage.write and function(path, body)
+    path=Storage.path(path);Storage.ensure(path);return Storage.write(path, body)
+end
+local isfile = Storage.file and function(path) return Storage.file(Storage.path(path)) or (Storage.path(path) ~= path and Storage.file(path)) end
+local isfolder = Storage.folder and function(path) return Storage.folder(Storage.path(path)) end
+local makefolder = Storage.mkdir and function(path)
+    path=Storage.path(path);Storage.ensure(path .. "/_");if not Storage.folder or not Storage.folder(path) then return Storage.mkdir(path) end
+end
+local delfile = Storage.remove and function(path) return Storage.remove(Storage.path(path)) end
+local renamefile = Storage.rename and function(source, destination) return Storage.rename(Storage.path(source), Storage.path(destination)) end
+local appendfile = Storage.append and function(path, body)
+    path=Storage.path(path);Storage.ensure(path);return Storage.append(path, body)
+end
+local listfiles = Storage.list and function(path) return Storage.list(Storage.path(path)) end
+local getcustomasset = Storage.asset and function(path, ...) return Storage.asset(Storage.path(path), ...) end
+function Storage.writeVerified(path, body)
+    if not writefile then return false, "File writing is unavailable." end
+    local ok, err = pcall(function()
+        if readfile and isfile and isfile(path) then
+            local previous=readfile(path)
+            local valid=pcall(function() assert(type(Http:JSONDecode(previous)) == "table") end)
+            if valid then writefile(path .. ".bak", previous)
+            else writefile(path .. ".invalid", previous) end
+        end
+        writefile(path .. ".tmp", body)
+        if readfile then assert(readfile(path .. ".tmp") == body, "Temporary file verification failed") end
+        local renamed = renamefile and pcall(renamefile, path .. ".tmp", path)
+        if not renamed then writefile(path, body) end
+        if readfile then assert(readfile(path) == body, "Saved file verification failed") end
+        if delfile and isfile and isfile(path .. ".tmp") then pcall(delfile, path .. ".tmp") end
+    end)
+    return ok, err
+end
 function task.spawn(callback, ...)
     if not alive then return nil end
     local args = table.pack(...)
@@ -66,6 +172,7 @@ function task.delay(seconds, callback, ...)
 end
 task.wait, task.cancel, task.synchronize, task.desynchronize = RawTask.wait, RawTask.cancel, RawTask.synchronize, RawTask.desynchronize
 local function New(class, parent)
+    assert(alive, "This Less session has already been unloaded.")
     local object = Instance.new(class)
     instances[object] = true
     if parent then object.Parent = parent end
@@ -147,9 +254,10 @@ local function clone(value)
     local result = {}; for key, child in pairs(value) do result[key] = clone(child) end; return result
 end
 local function merge(target, value)
-    for key, child in pairs(value or {}) do
+    if type(value) ~= "table" then return end
+    for key, child in pairs(value) do
         if type(child) == "table" and type(target[key]) == "table" then merge(target[key], child)
-        else target[key] = clone(child) end
+        elseif type(target[key]) ~= "table" or (key == "fov" and type(child) == "number") then target[key] = clone(child) end
     end
 end
 local defaults = {
@@ -160,7 +268,7 @@ local defaults = {
     infJump = false, infJumpKey = "", antiFling = false,
     bhop = false, bhopPower = 5, bhopSound = false, bhopKey = "",
     bombJump = false, bombJumpKey = "", autoFlingSheriff = false,
-    sheriff = { aimType = "Universal", aimVer = "V2", silentAim = false, autoShoot = false,
+    sheriff = { aimType = "Universal", aimVer = "V3", silentAim = false, autoShoot = false,
         autoGun = false, gunEsp = false, wallbang = false, fov = { on = true, size = 180 }, agDist = 40,
         flickSpeed = 6, flickReturn = 100, flickMouse = true, predEx = 0, resolver = true,
         pblank = false, shotTiming = false, shotSnd = "Off", killSnd = "Off", sndVol = 60 },
@@ -170,7 +278,24 @@ local defaults = {
     optim = {}, music = {}, vfx = {}, visuals = {},
 }
 local settings, stored, setters, controlDefaults = clone(defaults), {}, {}, {}
-local config = { applyHooks = {}, refreshHooks = {}, applying = false }
+local config = { applyHooks = {}, refreshHooks = {}, applying = false, ready = false, pending = {}, pendingOrder = {} }
+function config.prepareToggle(def)
+    -- Feature switches are persistent. Webhook sending remains opt-in because
+    -- its credentials are intentionally never written into shared configs.
+    if def.Text ~= "Start Sender" then def.NoSave = nil end
+    -- Restoring toggles before dependent engines exist can abort a module's UI.
+    -- Queue just the latest initial value, then apply once the whole menu exists.
+    local callback = def.Callback
+    if not callback then return end
+    config.pendingOrder[#config.pendingOrder + 1] = def
+    def.Callback = function(value)
+        if not config.ready then
+            config.pending[def] = {callback=callback, value=value, name=def.Text}
+            return
+        end
+        return guarded("control:" .. tostring(def.Text), callback, value)
+    end
+end
 local function ensureFolders()
     if not makefolder then return end
     for _, path in ipairs({ "LessNova", "LessNova/configs", "LessNova/nova" }) do
@@ -204,9 +329,17 @@ end
 local function readConfig(name)
     if not readfile or not isfile then return nil end
     local path = "LessNova/configs/" .. name .. ".json"
-    if not isfile(path) then return nil end
-    local ok, result = pcall(function() return decode(Http:JSONDecode(readfile(path))) end)
-    if ok and type(result) == "table" then return result end
+    for _, candidate in ipairs({path, path .. ".bak", path .. ".tmp"}) do
+        local ok, result = pcall(function()
+            if not isfile(candidate) then return nil end
+            local data = decode(Http:JSONDecode(readfile(candidate)))
+            assert(type(data) == "table" and type(data.settings) == "table", "Invalid configuration structure")
+            assert(data.controls == nil or type(data.controls) == "table", "Invalid controls structure")
+            return data
+        end)
+        if ok and result then return result end
+        if not ok then recordError("config_recovery:" .. candidate, result) end
+    end
     return nil
 end
 local saved = readConfig("autosave")
@@ -230,20 +363,39 @@ do
     settings.sheriff.fov = fov
 end
 if settings.sheriff.shotTiming == true then settings.sheriff.shotTiming = "Instant" end
--- HUD visibility never restores automatically on startup.
-local persistedMobile = clone(settings.mobile.pos or {})
-settings.mobile = {pos=persistedMobile}; settings.fly.on = false; settings.invis.on = false; settings.noclip.on = false
-settings.spin.on = false; settings.bhop = false; settings.fakepos.on = false
-settings.sheriff.autoShoot = false; settings.sheriff.silentAim = false
-settings.sheriff.aimType = "Universal"
+-- Defaults apply only to new installations. Existing choices are restored by
+-- their control callbacks after all feature engines have been constructed.
 local function saveConfig(name)
     if not writefile then return false, "This environment does not support file writing." end
+    if not config.ready then return false, "Startup is incomplete; previous settings were preserved." end
     ensureFolders()
-    local payload = { version = 1, settings = serial(settings), controls = serial(stored) }
-    payload.settings.mobile = {pos=serial(settings.mobile.pos or {})}
-    local ok, err = pcall(writefile, "LessNova/configs/" .. name .. ".json", Http:JSONEncode(payload))
-    return ok, err
+    local ok, payload = pcall(function()
+        return Http:JSONEncode({ version = 2, settings = serial(settings), controls = serial(stored) })
+    end)
+    if not ok then return false, payload end
+    return Storage.writeVerified("LessNova/configs/" .. name .. ".json", payload)
 end
+-- Register teardown before constructing modules: even a partially failed startup
+-- can be unloaded on the next execution without leaving old connections behind.
+local function Cleanup()
+    if cleaning then return end;cleaning=true
+    pcall(saveConfig,"autosave")
+    local ui=rawget(Private,"__pulseMM2Nova")
+    local window=ui and ui.W
+    if window and window.State and window.State.flush then pcall(window.State.flush) end
+    alive=false
+    if ui then ui.dead=true end
+    for name in pairs(renderNames) do pcall(UnbindRender,name) end
+    for _,connection in ipairs(connections) do pcall(function()connection:Disconnect()end) end
+    for i=#finalizers,1,-1 do pcall(finalizers[i]) end
+    local current=coroutine.running()
+    for thread in pairs(threads) do if thread~=current then pcall(RawTask.cancel,thread) end end
+    if window then pcall(function()window:Destroy()end) end
+    for instance in pairs(instances) do pcall(function()instance:Destroy()end) end
+    if RealEnv.LessNovaCleanup==Cleanup then RealEnv.LessNovaCleanup=nil end
+    if RealEnv.LessV2Cleanup==Cleanup then RealEnv.LessV2Cleanup=nil end
+end
+RealEnv.LessV2Cleanup=Cleanup
 
 -- Cached role reader adapted from Less: game role data, then weapon detection.
 local roleCache, roleAt, roleBusy = {}, -math.huge, false
@@ -1430,37 +1582,32 @@ Modules["z"] = function(G)
 					local J = T.Services.HttpService
 					function f.new(f)
 						local X = { path = f, data = {}, dirty = false }
-						pcall(function()
-							if f and isfile and readfile and isfile(f) then
-								local raw = readfile(f)
-								local t = J:JSONDecode(raw)
-								if type(t) == "table" then
-									if type(t.floats) ~= "table" then t.floats = nil end
-									if type(t.collapsed) ~= "table" then t.collapsed = nil end
-									if t.size ~= nil and (type(t.size) ~= "table" or tonumber(t.size[1]) == nil or tonumber(t.size[2]) == nil) then
-										t.size = nil
+						if f and isfile and readfile then
+							for _, candidate in ipairs({f, f .. ".bak", f .. ".tmp"}) do
+								local ok, data = pcall(function()
+									if not isfile(candidate) then return nil end
+									local t = J:JSONDecode(readfile(candidate))
+									assert(type(t) == "table", "Invalid UI state")
+									for _, key in ipairs({"floats", "collapsed", "groups", "tabOrder"}) do
+										if type(t[key]) ~= "table" then t[key]=nil end
 									end
-									X.data = t
-								else
-									error("invalid UI state")
-								end
+									for group, order in pairs(t.tabOrder or {}) do
+										if type(order) ~= "table" then t.tabOrder[group]=nil
+										else
+											for name, rank in pairs(order) do
+												if type(rank) ~= "number" or rank ~= rank or math.abs(rank) == math.huge then order[name]=nil end
+											end
+										end
+									end
+									return t
+								end)
+								if ok and data then X.data=data;break end
+								if not ok then recordError("ui_state:" .. candidate, data) end
 							end
-						end)
-						if f and isfile and isfile(f) and type(X.data) ~= "table" then
-							X.data = {}
-						end
-						-- A malformed state must not block the interface. Preserve it for debugging.
-						if f and isfile and isfile(f) and next(X.data) == nil then
-							pcall(function()
-								if readfile and writefile then
-									writefile(f .. ".invalid", readfile(f))
-								end
-								if delfile then delfile(f) end
-							end)
 						end
 						function X.get(t, R)
 							local B = X.data[t]
-							if B == nil then
+							if B == nil or (R ~= nil and type(B) ~= type(R)) then
 								return R
 							end
 							return B
@@ -1479,29 +1626,16 @@ Modules["z"] = function(G)
 							X.dirty = true
 							task.delay(0.6, function()
 								X.dirty = false
-								pcall(function()
-									if not (f and writefile) then
-										return
-									end
-									if isfolder and makefolder then
-										if not isfolder("LessNova") then
-											makefolder("LessNova")
-										end
-										if not isfolder("LessNova/nova") then
-											makefolder("LessNova/nova")
-										end
-									end
-									local encoded = J:JSONEncode(X.data)
-									local temp = f .. ".tmp"
-									local wrote = pcall(writefile, temp, encoded)
-									if wrote and renamefile then
-										pcall(renamefile, temp, f)
-									elseif wrote then
-										writefile(f, encoded)
-										if delfile then pcall(delfile, temp) end
-									end
-								end)
+								X.flush()
 							end)
+						end
+						function X.flush()
+							if not (f and writefile) then return end
+							local ok, err = pcall(function()
+								local written, reason=Storage.writeVerified(f, J:JSONEncode(X.data))
+								assert(written, reason)
+							end)
+							if not ok then recordError("ui_state_save", err) end
 						end
 						return X
 					end
@@ -12736,6 +12870,7 @@ Modules["VM.M"] = function(G)
 			end
 			local J = _((F.novaResolve(M, nil, "*")))
 			if not J then
+				recordError("ui_tab:" .. tostring(M), "Native tab creation failed; this tab could not be constructed.")
 				return L()
 			end
 			w.Native = J
@@ -13094,7 +13229,7 @@ Modules["VM.M"] = function(G)
 				return F
 			end
 			function w:Toggle(F)
-				if OriginalTabName == "Buttons" and tostring(F.Text):find(" Button", 1, true) then F.NoSave = true; F.Default = false end
+				config.prepareToggle(F)
 				local J = not F.NoSave and c(F.Text) or nil
 				if J then
 					T[J] = F.Default == true
@@ -13131,6 +13266,8 @@ Modules["VM.M"] = function(G)
 				end
 				I(s)
 				local W = {
+					-- A missing native row is reported below instead of silently
+					-- presenting a successful-but-invisible control.
 					Row = s and s.Row or nil,
 					Get = function()
 						return K
@@ -13158,6 +13295,7 @@ Modules["VM.M"] = function(G)
 						W.Set(J == true)
 					end
 				end
+				if not s then recordError("ui_toggle:" .. tostring(M) .. "/" .. tostring(F.Text), "Native toggle creation failed") end
 				if F.Settings then
 					if s and s.Drawer then
 						u = n(s.Drawer, F.Settings)
@@ -13539,7 +13677,7 @@ Modules["VM.M"] = function(G)
 				}
 			end
 			function w:ToggleKey(F)
-				if OriginalTabName == "Buttons" then F.NoSave = true; F.Default = false end
+				config.prepareToggle(F)
 				local J = not F.NoSave and c(F.Text) or nil
 				if J then
 					T[J] = F.Default == true
@@ -50273,9 +50411,9 @@ Modules["D"] = function(G)
 				wind = 5,
 				windAngle = 35,
 				gusts = true,
-				shelter = true,
-				grade = true,
-				sound = true,
+				shelter = false,
+				grade = false,
+				sound = false,
 				soundVolume = 60,
 				thunder = false,
 				stormPower = 50,
@@ -70933,6 +71071,7 @@ local function SafeInit(callback)
     return ok
 end
 local function Start(name, env, key)
+    if not alive then return false end
     local beforeErrors=#diagnostics
     local ok, err = pcall(function()
         local init = assert(Modules[key or name], "Factory missing: " .. tostring(key or name))(env)
@@ -70940,6 +71079,14 @@ local function Start(name, env, key)
     end)
     local partial=ok and #diagnostics>beforeErrors
     moduleStatus[name] = { ok = ok and not partial, partial=partial, error = not ok and tostring(err) or partial and "One or more subsystems reported an error." or nil }
+    if not ok then recordError(name, err) end
+    return ok
+end
+local function InstallSection(name, callback)
+    if not alive then return false end
+    moduleStatus[name] = {ok=false, loading=true}
+    local ok, err = xpcall(callback, function(message) return debug.traceback(tostring(message), 2) end)
+    moduleStatus[name] = {ok=ok, error=not ok and tostring(err) or nil}
     if not ok then recordError(name, err) end
     return ok
 end
@@ -71247,7 +71394,7 @@ choice(Combat, "Aim version", "aimVer", { "V2", "V3", "OLD" }, function(v)
         if aim.on and aim.installHook then pcall(aim.installHook) end
     end
 end)
-Combat:Toggle({ Text = "Silent Aim", NoSave=true, Default=false, Callback=function(v)
+Combat:Toggle({ Text = "Silent Aim", Default=settings.sheriff.silentAim, Callback=function(v)
     settings.sheriff.silentAim=v
     legacyAim.refresh()
     local aim=Private.__pulseAim
@@ -71256,7 +71403,7 @@ Combat:Toggle({ Text = "Silent Aim", NoSave=true, Default=false, Callback=functi
         if aim.on and aim.installHook then pcall(aim.installHook) end
     end
 end })
-Combat:Toggle({ Text = "Auto Shoot", NoSave=true, Default=false, Callback=function(v) settings.sheriff.autoShoot=v end })
+Combat:Toggle({ Text = "Auto Shoot", Default=settings.sheriff.autoShoot, Callback=function(v) settings.sheriff.autoShoot=v end })
 Combat:Toggle({ Text = "Auto Grab Gun", Default=false, Callback=function(v) settings.sheriff.autoGun=v end })
 Combat:Toggle({ Text = "Wallbang", Default=false, Callback=function(v) settings.sheriff.wallbang=v end })
 Combat:Toggle({ Text = "Movement Resolver", Default=true, Callback=function(v) settings.sheriff.resolver=v end })
@@ -71445,12 +71592,9 @@ local function applyConfig(data, startup)
         aim.on = aimHookEnabled()
         if aim.on and aim.installHook then pcall(aim.installHook) end
     end
-    for key,value in pairs(settings.mobile) do if type(value)=="boolean" then settings.mobile[key]=false end end
     for key,value in pairs(data.controls or {}) do
-        if not (tostring(key):match("^Buttons/") and tostring(key):match(" Button#?%d*$")) then
             local setter=setters[key]
             if setter then guarded("config:"..key,setter,value) else stored[key]=value end
-        end
     end
     for _,callback in ipairs(config.applyHooks) do guarded("apply_config",callback) end
     if Private.__pulseSyncUIS then Private.__pulseSyncUIS() end
@@ -71466,7 +71610,7 @@ Settings:Button({Text="Save local config",Callback=function()
 end})
 Settings:Button({Text="Load local config",Callback=function()
     local data=readConfig(configName)
-    if data then applyConfig(data);Notify("Configuration loaded. Buttons remain hidden until enabled.") else Notify("Configuration not found.") end
+    if data then applyConfig(data);Notify("Configuration loaded.") else Notify("Configuration not found.") end
 end})
 Settings:Button({Text="Delete local config",Callback=function()
     if configName=="" or configName=="autosave" then Notify("Choose a named configuration first.");return end
@@ -71481,34 +71625,28 @@ Settings:Button({Text="Reset settings",Callback=function()
     Notify("Default settings restored.")
 end})
 Settings:Header("Diagnostics")
+Settings:Button({Text="Restore UI layout",Callback=function()
+    -- Only layout is reset; feature preferences and resources are untouched.
+    for _,key in ipairs({"floats","collapsed","groups","tabOrder","size","touchSize","winPos","touchPos"}) do
+        Window.State.data[key]=nil
+    end
+    Window.State.flush()
+    Notify("Layout reset. Execute the script again to rebuild the interface.")
+end})
 Settings:Button({Text="Show module status",Callback=function()
     local rows={}
     for name,status in pairs(moduleStatus) do rows[#rows+1]=(status.ok and "OK " or "ERROR ")..name end
     table.sort(rows);Notify(table.concat(rows,"\n"),"Modules")
 end})
 Settings:Button({Text="Save diagnostics locally",Callback=function()
-    if writefile then writefile("LessNova/diagnostics.json",Http:JSONEncode({modules=moduleStatus,errors=diagnostics}));Notify("Saved to LessNova/diagnostics.json") end
+    if writefile then writefile("LessNova/diagnostics.json",Http:JSONEncode({modules=moduleStatus,errors=diagnostics}));Notify("Saved to LessV2/logs/diagnostics.json") end
 end})
-local function Cleanup()
-    if cleaning then return end;cleaning=true
-    pcall(saveConfig,"autosave")
-    alive=false;UI.dead=true
-    for name in pairs(renderNames) do pcall(UnbindRender,name) end
-    for _,connection in ipairs(connections) do pcall(function()connection:Disconnect()end) end
-    for i=#finalizers,1,-1 do pcall(finalizers[i]) end
-    local current=coroutine.running()
-    for thread in pairs(threads) do if thread~=current then pcall(RawTask.cancel,thread) end end
-    pcall(function()Window:Destroy()end)
-    for instance in pairs(instances) do pcall(function()instance:Destroy()end) end
-    if RealEnv.LessNovaCleanup==Cleanup then RealEnv.LessNovaCleanup=nil end
-end
-RealEnv.LessNovaCleanup=Cleanup
 Settings:Button({Text="Unload Less",Callback=Cleanup})
 -- Additional standalone features are installed below.
 
 
 -- Original Less visual weapon engine, with tracked resources.
-do
+InstallSection("weapon_factory", function()
 local function CreateLessSkins(forceRefresh)
 		-- The menu uses 2D catalog art; the equipped weapon still uses the Less model overlay.
 		local previewOnly2D = false
@@ -73616,11 +73754,11 @@ local function CreateLessSkins(forceRefresh)
 		return _G.__MM2Viz
 	end
 Private.CreateLessSkins=CreateLessSkins
-end
+end)
 
 
 -- Less autofarm: original movement, recovery, rewards, boxes and logging.
-do
+InstallSection("candy_farm_engine", function()
 local localPlayer,Workspace,ReplicatedStorage=LocalPlayer,World,Services.ReplicatedStorage
 local TweenService,VirtualUser=Services.TweenService,Services.VirtualUser
 local v={Notify=function(_,def)Notify(def.Content,def.Title)end}
@@ -75866,13 +76004,17 @@ tbl.start=function()fn27();tbl.startFarmHopWatch()end
 tbl.stop=function()fn28();tbl.stopFarmHopWatch()end
 tbl.setSpeed=function(value)n2=value>=25 and 23 or value end
 tbl.setReset=function(value)flag12=value;if value then fn29()else fn30()end end
+tbl.setAfk=function(value)
+ flag13=value==true
+ if flag13 then fn31() else fn32() end
+end
 OnCleanup(function()
  tbl.whOn=false;tbl.whQ={};tbl.shellsOn=false;flag12=false;flag13=false
  for key in pairs(tbl.boxOn)do tbl.boxOn[key]=false end
  tbl.stopFarmHopWatch();fn28();fn32();tbl.reclip(tbl.farmClipWas)
  for _,connection in ipairs(tbl.conns)do pcall(function()connection:Disconnect()end)end
 end)
-end
+end)
 
 Private.LessCursors= {
 	Default = "rbxasset://textures/GunCursor.png",
@@ -75912,7 +76054,7 @@ Private.LessCursors= {
 
 
 -- Less Nova 1.1: native HUD, original Less cursor/skins and complete farm UI.
-do
+InstallSection("round_hud", function()
     settings.hud=settings.hud or {round=false}
     Buttons:Sub("UIS");Buttons:Header("HUD")
     local section=Buttons:LastSection()
@@ -75946,9 +76088,9 @@ do
     Connect(RunService.Heartbeat,function(dt)elapsed+=dt;if elapsed>=0.25 then elapsed=0;updateRound()end end)
     config.applyHooks[#config.applyHooks+1]=updateRound
     Private.LessHUD={Update=updateRound,Label=label,Ping=pingControl}
-end
+end)
 
-do
+InstallSection("cursor_ui", function()
     local visuals=UI:Tab("Visuals","eye")
     visuals:Sub("Random");visuals:Header("Custom Cursor")
     settings.lessCursor=settings.lessCursor or {style="Default",size=50,spin=false,onlyWithGun=false}
@@ -75995,9 +76137,9 @@ do
     OnCleanup(function()Input.MouseIconEnabled=originalIcon;mouse.Icon=originalMouseIcon end)
     config.applyHooks[#config.applyHooks+1]=applyCursor
     Private.LessCursor={Apply=applyCursor,Image=cursor}
-end
+end)
 
-do
+InstallSection("weapon_skins_ui", function()
     local tab=UI:Tab("Visuals","eye");pcall(function()tab.Native.PageColumns=tab.Native.PageColumns or {};tab.Native.PageColumns.WSkins=1 end);tab:Sub("WSkins");tab:Header("Visual Skin Changer")
     local status=tab:Note({Text="Loading skins…"})
     local engine,busy,query=nil,false,""
@@ -76076,9 +76218,9 @@ do
         buildCatalog()
     end)
     OnCleanup(function()local current=engine or Private.__MM2Viz;if current and current.destroy then current.destroy()end end)
-end
+end)
 
-do
+InstallSection("servers_ui", function()
     local tab=UI:Tab("Servers","server")
     tab:SubTabs({{key="Servers",label="Servers",icon="server"},{key="Map Vote",label="Map Vote",icon="map"}})
     tab:Sub("Servers")
@@ -76249,18 +76391,21 @@ do
         if requestedJobId=="" then Notify("Enter a server ID first.","Servers","warning");return end
         join({id=requestedJobId},"the entered server")
     end})
-end
+end)
 
-do
+InstallSection("candy_farm_ui", function()
     local farm=Private.LessFarm
     local tab=UI:Tab("Farm","coins")
-    settings.farm=settings.farm or {speed=25,reset=true,hop=false,claim=false,fling=false,kill=false,boxes={}}
+    tab:Header("Candy Farm")
+    if not farm then
+        tab:Note({Text="Candy Farm could not initialize. See Settings > Diagnostics for the error."})
+        error("Candy Farm engine is unavailable; other sections remain usable.")
+    end
+    settings.farm=type(settings.farm)=="table" and settings.farm or {speed=25,reset=true,hop=false,claim=false,fling=false,kill=false,boxes={}}
     local cfg=settings.farm;cfg.boxes=cfg.boxes or {}
     local enabled=false
-    tab:Header("Candy Farm")
-    -- Automatic movement, purchases and webhook sending always require activating their controls.
-    local toggle=tab:Toggle({Text="Coin Autofarm",NoSave=true,Default=false,Callback=function(value)
-        enabled=value
+    local toggle=tab:Toggle({Text="Coin Autofarm",Default=cfg.enabled==true,Callback=function(value)
+        enabled=value;cfg.enabled=value==true
         if value then
             settings.fly.on=false
             for key,setter in pairs(setters)do
@@ -76273,25 +76418,43 @@ do
     tab:Header("Settings")
     local perfKeys={"gfxLow","noShadows","noLights","noPost","noFx","noTex","plastic","simplePlayers","stopAnims"}
     local savedPerformance
+    -- Older saves persisted the enabled optimizer flags but not their baseline.
+    -- Recover that one legacy case to disabled flags, rather than snapshotting
+    -- the already-optimized state as the state to restore.
+    local legacyPerformanceRestore=false
+    if type(cfg.performanceBaseline)~="table" then
+        local allEnabled=true
+        for _,key in ipairs(perfKeys)do if settings.optim[key]~=true then allEnabled=false;break end end
+        for key,value in pairs(stored)do
+            if allEnabled and value==true and tostring(key):match("^Farm/.-/Performance Mode$") then legacyPerformanceRestore=true;break end
+        end
+    end
     local function performance(value)
         local optimizer=Private.__lessOptimizer
         if not optimizer then Notify("The optimizer has not initialized.");return end
         if value then
             if savedPerformance then return end
-            savedPerformance={}
+            savedPerformance=type(cfg.performanceBaseline)=="table" and clone(cfg.performanceBaseline) or {}
             for _,key in ipairs(perfKeys)do
-                savedPerformance[key]=settings.optim[key]==true
+                if savedPerformance[key]==nil then
+                    savedPerformance[key]=not legacyPerformanceRestore and settings.optim[key]==true
+                end
                 if optimizer.controls[key]then optimizer.controls[key].Set(true)end
             end
+            cfg.performanceBaseline=clone(savedPerformance)
+            cfg.performanceActive=true
+            legacyPerformanceRestore=false
         elseif savedPerformance then
             for _,key in ipairs(perfKeys)do if optimizer.controls[key]then optimizer.controls[key].Set(savedPerformance[key])end end
             savedPerformance=nil
+            cfg.performanceBaseline=nil
+            cfg.performanceActive=false
         else
             return
         end
         optimizer.refresh()
     end
-    tab:Toggle({Text="Performance Mode",NoSave=true,Default=false,Callback=performance})
+    tab:Toggle({Text="Performance Mode",Default=cfg.performanceActive==true,Callback=performance})
     tab:Toggle({Text="Hop When Server Dies",Default=cfg.hop,Callback=function(value)cfg.hop=value;farm.farmHopOn=value end})
     farm.populatedHop=function()
         if not enabled or not cfg.hop then return false end
@@ -76301,15 +76464,13 @@ do
     end
     tab:Toggle({Text="Anti-AFK",Default=settings.afk.on,Callback=function(value)
         settings.afk.on=value
-        flag13=value==true
-        if flag13 then fn31() else fn32() end
+        farm.setAfk(value)
     end})
-    if settings.afk.on then flag13=true;fn31() end
     tab:Toggle({Text="Auto-Reset When Bag Full",Default=cfg.reset,Callback=function(value)cfg.reset=value;farm.setReset(value and enabled)end})
     local baseStart,baseStop=farm.start,farm.stop
     farm.start=function()baseStart();farm.setReset(cfg.reset)end
     farm.stop=function()farm.setReset(false);baseStop()end
-    tab:Toggle({Text="Auto Claim Shells / Rewards",NoSave=true,Default=false,Callback=function(value)
+    tab:Toggle({Text="Auto Claim Shells / Rewards",Default=cfg.claim==true,Callback=function(value)
         cfg.claim=value;farm.shellsOn=value;if value then farm.startShells()else farm.stopShells()end
     end})
     tab:Toggle({Text="Fling Murderer When Done",Default=cfg.fling,Callback=function(value)cfg.fling=value;farm.flingWhenDone=value;farm.flingDoneFired=false end})
@@ -76340,9 +76501,9 @@ do
     Connect(RunService.Heartbeat,function(dt)elapsed+=dt;if elapsed>=1 then elapsed=0;updateFlags()end end)
     OnCleanup(function()performance(false)end)
     Private.LessFarmUI={Toggle=toggle,Performance=performance,Config=cfg,IsRunning=function()return enabled end}
-end
+end)
 
-do
+InstallSection("role_farm_ui", function()
     local farm=Private.LessFarm
     local tab=UI:Tab("Farm","coins")
     settings.roleFarm=settings.roleFarm or {innocent=false,sheriff=false,murderer=false,exp=false}
@@ -76404,7 +76565,9 @@ do
         local murder=live and role and role:lower():find("murder",1,true)~=nil and (cfg.murderer or cfg.exp)
         local sheriff=live and role=="Sheriff" and (cfg.sheriff or cfg.exp)
         local innocent=live and (role=="Innocent" or role=="Survivor" or role=="Hero") and (cfg.innocent or cfg.exp)
-        local roleWinMode=(sheriff and cfg.sheriff) or (innocent and cfg.innocent)
+        -- sheriff/innocent already include EXP mode in their role checks.
+        -- Do not require the individual switches again here.
+        local roleWinMode=sheriff or innocent
         setKillAll(murder==true)
         _G.__lessRoleFarmHold=roleWinMode==true or nil
         if roleWinMode then
@@ -76424,8 +76587,8 @@ do
         setKillAll(false)
     end
     tab:Header("Role Farm")
-    tab:Note({Text="Innocent mode moves you to the lobby to survive until the round ends. Sheriff mode waits there and tries to shoot the murderer. Both pause coin farming while active."})
-    local master=tab:Toggle({Text="Enable Role Farm",NoSave=true,Default=false,Callback=function(value)
+    tab:Note({Text="Innocent mode waits in the lobby; Sheriff mode waits there and tries to shoot the murderer. Both pause coin farming while active. EXP Farm automatically selects the action for your current role, including Kill All as Murderer. It does not multiply XP."})
+    local master=tab:Toggle({Text="Enable Role Farm",Default=false,Callback=function(value)
         running=value
         if value then update() else stop() end
     end})
@@ -76440,10 +76603,10 @@ do
         if elapsed>=0.25 then elapsed=0;if running then update() elseif statusLabel then statusLabel.Text="Role Farm: disabled" end end
     end)
     OnCleanup(stop)
-    Private.LessRoleFarm={Update=update,Stop=stop,Config=cfg}
-end
+    Private.LessRoleFarm={Update=update,Stop=stop,Config=cfg,IsRunning=function()return running end}
+end)
 
-do
+InstallSection("map_vote_ui", function()
     local tab=UI:Tab("Servers","server")
     tab:Sub("Map Vote")
     settings.mapVote=settings.mapVote or {favorite="",panel=true}
@@ -76608,14 +76771,14 @@ do
         end
     end)
     OnCleanup(function()pcall(function()gui:Destroy()end)end)
-end
+end)
 
 
 
 local Extras = UI:Tab("Visuals", "eye")
 pcall(function() Extras.Native.PageColumns=Extras.Native.PageColumns or {}; Extras.Native.PageColumns.Auras=1 end)
 Extras:Sub("Auras")
-do
+InstallSection("auras_ui", function()
 local Library=(function()
 -- Motor de las 143 auras y hats originales, integrado en Less.
 local Players = game:GetService("Players")
@@ -78065,7 +78228,8 @@ showCategory("All")
     ready=true
     config.applyHooks[#config.applyHooks+1]=sync
     sync()
-end
+end)
+InstallSection("knife_preview_ui", function()
 Murder:Group({Title="Knife hitbox",Side="Right"})
 local hitboxSize,showHitbox,originalKnife=1,false,setmetatable({}, {__mode="k"})
 local hitboxSphere=Make("Part",{Name="LessNovaHitboxPreview",Shape=Enum.PartType.Ball,Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,Material=Enum.Material.ForceField,Color=Color3.fromHex("FF8A24"),Transparency=0.65},World)
@@ -78105,7 +78269,9 @@ BindRender("LessAim",Enum.RenderPriority.Camera.Value+3,function()
     local mouse=Input:GetMouseLocation()
     if triggerbot and onScreen and (Vector2.new(projected.X,projected.Y)-mouse).Magnitude<=triggerFOV then less.shoot() end
 end)
+end)
 
+InstallSection("keybinds_ui", function()
 local Keybinds=UI:Tab("Keybinds","keyboard")
 Keybinds:Header("Actions")
 local actionKeys={}
@@ -78119,7 +78285,7 @@ local actions={
 }
 for name in pairs(actions) do
     local actionName=name
-    pcall(function()
+    guarded("keybind:" .. actionName, function()
         Keybinds:Keybind({Text=actionName,Default=nil,Callback=function(key)actionKeys[actionName]=key end})
     end)
 end
@@ -78129,7 +78295,9 @@ Connect(Input.InputBegan,function(input,processed)
         if input.KeyCode==key or input.UserInputType==key then task.spawn(actions[name]) end
     end
 end)
+end)
 
+InstallSection("custom_audio_ui", function()
 Sounds:Header("Custom Roblox audio")
 local customAudio=""
 Sounds:Input({Text="Audio asset ID",Default="",Callback=function(v)customAudio=tostring(v):match("%d+") or "" end})
@@ -78141,8 +78309,10 @@ Sounds:Button({Text="Preview audio ID",Callback=function()
     previewSound:Play();task.delay(15,function()if previewSound then previewSound:Stop()end end)
 end})
 Sounds:Button({Text="Stop audio preview",Callback=function()if previewSound then previewSound:Stop()end end})
+end)
 
 -- Expose useful pure algorithms without adding backend or account features.
+InstallSection("utilities", function()
 Private.LessUtilities={Base64Decode=Base64,RC4=Modules.e({[0]=bit32.bxor})}
 local rsa={};Modules.l({[0]=rsa})();Private.LessUtilities.RSA=rsa
 local shaConstants={
@@ -78158,9 +78328,17 @@ local shaConstants={
 local sha256=Modules["VM.b"]({[0]=bit32.band,[1]=bit32.bxor,[2]=bit32.rrotate,[3]=bit32.rshift,[4]=bit32.lshift,[5]=shaConstants,[6]=bit32.bnot})
 Private.LessUtilities.SHA256=sha256
 Private.LessUtilities.SHA256Hex=function(value)return(sha256(value):gsub(".",function(c)return string.format("%02x",c:byte())end))end
+end)
 
--- All mobile action buttons stay hidden on startup, including after config load.
-for key,value in pairs(settings.mobile) do if type(value)=="boolean" then settings.mobile[key]=false end end
+-- Apply restored activation only after every engine and UI block exists.
+config.ready=true
+for _, def in ipairs(config.pendingOrder) do
+    local entry=config.pending[def]
+    if entry then guarded("restore:" .. tostring(entry.name), entry.callback, entry.value) end
+end
+table.clear(config.pending)
+table.clear(config.pendingOrder)
+legacyAim.refresh()
 if Private.__pulseSyncUIS then Private.__pulseSyncUIS() end
 for _,callback in ipairs(config.applyHooks) do guarded("initial_apply",callback) end
 local lastSaved=""
@@ -78178,8 +78356,13 @@ local first=UI.NovaTabs.Combat or UI.NovaTabs.Movement
 if first then Window:SelectTab(first) end
 local count,failed=0,0
 for _,status in pairs(moduleStatus) do count+=1;if not status.ok then failed+=1 end end
-Notify(failed==0 and "Ready. Press G to open or close the menu. Enable buttons from Buttons." or
+Notify(failed==0 and "Ready. Saved settings restored. Press G to open or close the menu." or
     tostring(failed).." module(s) need attention. Open Settings > Diagnostics.","Less")
 RealEnv.LessNova={Version="1.2.0-auras143",Auras=RealEnv.Auras,Window=Window,Settings=settings,Modules=moduleStatus,Diagnostics=diagnostics,Utilities=Private.LessUtilities,Cleanup=Cleanup}
 
-assert(RealEnv.LessNova.Auras and #RealEnv.LessNova.Auras.Catalog==143,"Se requieren 143 auras y hats")
+if not (RealEnv.LessNova.Auras and #RealEnv.LessNova.Auras.Catalog==143) then
+    recordError("auras_catalog", "Expected 143 auras and hats. See auras_ui diagnostics.")
+end
+pcall(function()
+    if writefile then writefile("LessNova/diagnostics.json", Http:JSONEncode({modules=moduleStatus, errors=diagnostics, ready=config.ready})) end
+end)
