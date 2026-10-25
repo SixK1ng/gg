@@ -76503,6 +76503,59 @@ InstallSection("candy_farm_ui", function()
     Private.LessFarmUI={Toggle=toggle,Performance=performance,Config=cfg,IsRunning=function()return enabled end}
 end)
 
+InstallSection("farm_disable_render_ui", function()
+    local tab=UI:Tab("Farm","coins")
+    tab:Header("Disable Render")
+    settings.disableRender=type(settings.disableRender)=="table" and settings.disableRender or {on=false}
+    local cfg=settings.disableRender
+    local enabled=false
+    local renderDisabled,warnedUnavailable=false,false
+    -- Below Nova's menu, so an unbound key can never trap the user behind it.
+    local gui=Make("ScreenGui",{Name="LessV2DisableRender",IgnoreGuiInset=true,ResetOnSpawn=false,DisplayOrder=999998,ZIndexBehavior=Enum.ZIndexBehavior.Sibling},Host)
+    local frame=Make("Frame",{Name="Blackout",Size=UDim2.fromScale(1,1),BackgroundColor3=Color3.new(0,0,0),BorderSizePixel=0,Visible=false,Active=false},gui)
+    local function restoreRender()
+        if not renderDisabled then return end
+        local ok,err=pcall(function()RunService:Set3dRenderingEnabled(true)end)
+        if ok then renderDisabled=false
+        else
+            recordError("disable_render_restore",err)
+            Notify("Could not restore 3D rendering. Try disabling Disable Render again.","Disable Render","warning")
+        end
+    end
+    local function setEnabled(value)
+        value=value==true
+        cfg.on=value
+        if enabled==value then
+            if not value then restoreRender() end
+            return
+        end
+        enabled=value
+        if value then
+            frame.Visible=true
+            local ok=pcall(function()RunService:Set3dRenderingEnabled(false)end)
+            if ok then renderDisabled=true
+            elseif not warnedUnavailable then
+                warnedUnavailable=true
+                Notify("This executor cannot disable 3D rendering. Using the black-screen overlay only.","Disable Render","warning")
+            end
+        else
+            frame.Visible=false
+            restoreRender()
+        end
+    end
+    local toggle=tab:Toggle({Text="Black screen",Default=cfg.on==true,Callback=setEnabled})
+    local keybind=tab:Keybind({Text="Disable Render Keybind",Default=Enum.KeyCode.K})
+    Connect(Input.InputBegan,function(input,processed)
+        if not config.ready or processed or Input:GetFocusedTextBox() then return end
+        local key=keybind and keybind.Get and keybind.Get()
+        if key and Private.__pulseBindHit(input,key) then toggle.Set(not enabled) end
+    end)
+    OnCleanup(function()
+        setEnabled(false)
+        pcall(function()gui:Destroy()end)
+    end)
+end)
+
 InstallSection("role_farm_ui", function()
     local farm=Private.LessFarm
     local tab=UI:Tab("Farm","coins")
