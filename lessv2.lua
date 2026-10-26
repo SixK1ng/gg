@@ -261,7 +261,7 @@ local function merge(target, value)
     end
 end
 local defaults = {
-    ui = { stretch = 0 }, afk = { on = false },
+    ui = { stretch = 0 }, afk = { on = true },
     fly = { on = false, speed = 60, method = "Classic", key = "" },
     noclip = { on = false, key = "" }, invis = { on = false, key = "" },
     spin = { on = false, speed = 10, mode = "Smooth", key = "" },
@@ -75976,19 +75976,23 @@ do
 	end
 
 	fn31 = function()
-		if connection2 then
+		if connection2 and connection2.Connected then
 			return
 		end
+		local VirtualUser = game:GetService("VirtualUser")
 
 		connection2 = Connect(localPlayer.Idled, function()
 			if not flag13 then
 				return
 			end
 
-			pcall(function()
+			local ok, err = pcall(function()
 				VirtualUser:CaptureController()
 				VirtualUser:ClickButton2(Vector2.new())
 			end)
+			if not ok then
+				warn("[Less / Anti-AFK] Could not simulate input: " .. tostring(err))
+			end
 		end)
 	end
 
@@ -76008,6 +76012,8 @@ tbl.setAfk=function(value)
  flag13=value==true
  if flag13 then fn31() else fn32() end
 end
+-- Initialize before the UI; saved toggle values can override this state.
+tbl.setAfk(settings.afk.on)
 OnCleanup(function()
  tbl.whOn=false;tbl.whQ={};tbl.shellsOn=false;flag12=false;flag13=false
  for key in pairs(tbl.boxOn)do tbl.boxOn[key]=false end
