@@ -5595,19 +5595,23 @@ do
 	end
 
 	fn31 = function()
-		if connection2 then
+		if connection2 and connection2.Connected then
 			return
 		end
+		local VirtualUser = game:GetService("VirtualUser")
 
 		connection2 = localPlayer.Idled:Connect(function()
 			if not flag13 then
 				return
 			end
 
-			pcall(function()
+			local ok, err = pcall(function()
 				VirtualUser:CaptureController()
 				VirtualUser:ClickButton2(Vector2.new())
 			end)
+			if not ok then
+				warn("[Less / Anti-AFK] Could not simulate input: " .. tostring(err))
+			end
 		end)
 	end
 
@@ -9647,6 +9651,86 @@ do
 			end
 		end,
 	})
+
+	do
+		local lighting = game:GetService("Lighting")
+		local inputService = game:GetService("UserInputService")
+		local enabled, original, effects = false, {}, {}
+		local effectConnection, quality, toggle
+		local gui = Instance.new("ScreenGui")
+		gui.Name = "LessDisableRender"
+		gui.IgnoreGuiInset = true
+		gui.ResetOnSpawn = false
+		gui.DisplayOrder = -1
+		gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.fromScale(1, 1)
+		frame.BackgroundColor3 = Color3.new(0, 0, 0)
+		frame.BorderSizePixel = 0
+		frame.Visible = false
+		frame.Parent = gui
+		local values = {
+			Brightness = 0, GlobalShadows = false, FogEnd = 0,
+			Ambient = Color3.new(0, 0, 0), OutdoorAmbient = Color3.new(0, 0, 0),
+		}
+		local function suppress(effect)
+			if effect:IsA("PostEffect") then
+				if effects[effect] == nil then effects[effect] = effect.Enabled end
+				effect.Enabled = false
+			end
+		end
+		local function setEnabled(value)
+			value = value == true
+			if enabled == value then return end
+			enabled = value
+			frame.Visible = value
+			if value then
+				original, effects, quality = {}, {}, nil
+				for key, replacement in pairs(values) do
+					original[key] = lighting[key]
+					lighting[key] = replacement
+				end
+				for _, effect in ipairs(lighting:GetChildren()) do suppress(effect) end
+				effectConnection = lighting.ChildAdded:Connect(suppress)
+				local ok, err = pcall(function()
+					quality = settings().Rendering.QualityLevel
+					settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+				end)
+				if not ok then warn("[Less / Disable Render] " .. tostring(err)) end
+			else
+				if effectConnection then effectConnection:Disconnect(); effectConnection = nil end
+				for key, previous in pairs(original) do lighting[key] = previous end
+				for effect, previous in pairs(effects) do
+					if effect.Parent then effect.Enabled = previous end
+				end
+				if quality ~= nil then
+					pcall(function() settings().Rendering.QualityLevel = quality end)
+				end
+				original, effects, quality = {}, {}, nil
+			end
+		end
+		toggle = tbl11.farm:Toggle({
+			Title = "Disable Render",
+			Flag = "Toggle_Farm_Disable_Render",
+			Desc = "Black screen and reduced lighting. Press K to toggle.",
+			Type = "Toggle",
+			Value = false,
+			Callback = setEnabled,
+		})
+		local keyConnection = inputService.InputBegan:Connect(function(input, processed)
+			if processed or inputService:GetFocusedTextBox() then return end
+			if input.KeyCode == Enum.KeyCode.K then
+				local value = not enabled
+				toggle:Set(value)
+				setEnabled(value)
+			end
+		end)
+		tbl.cleanupDisableRender = function()
+			keyConnection:Disconnect()
+			setEnabled(false)
+			gui:Destroy()
+		end
+	end
 
 	tbl11.farm:Toggle({
 		Title = "Auto-Reset When Bag Full",
@@ -14759,6 +14843,7 @@ fn50("Delete Config", Color3.fromHex("#FCA5A5"))
 fn50("Delete Autosave Config", Color3.fromHex("#FCA5A5"))
 
 local function LessV2Cleanup()
+	if tbl.cleanupDisableRender then tbl.cleanupDisableRender(); tbl.cleanupDisableRender = nil end
 	fn8()
 	fn12()
 	flag = false
