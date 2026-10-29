@@ -76250,6 +76250,16 @@ InstallSection("servers_ui", function()
         local ok,err=pcall(queueFn,queuedCode)
         return ok,err
     end
+    local function prepareTeleport()
+        -- Persist the latest toggle state before the client is replaced by Roblox.
+        -- The periodic autosave may not have run yet if the user rejoins immediately.
+        pcall(saveConfig,"autosave")
+        local queued,queueError=queueReconnectScript()
+        if not queued then
+            Notify("The script will not reload after teleport: "..tostring(queueError),"Servers","warning")
+        end
+        return queued
+    end
     local function isConnectionPrompt(prompt)
         local parts={}
         for _,object in ipairs(prompt:GetDescendants())do
@@ -76355,6 +76365,7 @@ InstallSection("servers_ui", function()
     local function join(server, label)
         if not server or not server.id then Notify("No available server was found.","Servers","warning");return end
         status.Text="Joining "..(label or "server").."…"
+        prepareTeleport()
         local ok,err=pcall(function()teleport:TeleportToPlaceInstance(game.PlaceId,server.id,LocalPlayer)end)
         if not ok then
             status.Text="Couldn't start the teleport."
@@ -76382,6 +76393,7 @@ InstallSection("servers_ui", function()
     end})
     tab:Button({Text="Rejoin Current Server",Callback=function()
         status.Text="Rejoining the current server…"
+        prepareTeleport()
         local ok,err=pcall(function()teleport:TeleportToPlaceInstance(game.PlaceId,game.JobId,LocalPlayer)end)
         if not ok then status.Text="Couldn't start the rejoin.";Notify(tostring(err),"Servers","warning")end
     end})
