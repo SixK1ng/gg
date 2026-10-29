@@ -2907,9 +2907,31 @@ do
 		return nil
 	end
 
+	local function prepareTeleport()
+		-- Save the latest toggle state before Roblox replaces this client.
+		pcall(function()
+			if tbl.saveNow then tbl.saveNow() end
+		end)
+
+		local url = tostring(tbl.autoReconnectScriptUrl or "https://raw.githubusercontent.com/SixK1ng/gg/main/less.lua"):gsub("%s+", "")
+		local queueFn = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+		if not url:match("^https://") or type(queueFn) ~= "function" then
+			v:Notify({ Title = "Teleport", Content = "The script may not reload after teleport; queue_on_teleport is unavailable.", Duration = 4, Icon = "x" })
+			return false
+		end
+
+		local queuedCode = "repeat task.wait() until game:IsLoaded()\nloadstring(game:HttpGet(" .. string.format("%q", url) .. "))()"
+		local ok = pcall(queueFn, queuedCode)
+		if not ok then
+			v:Notify({ Title = "Teleport", Content = "The script could not be queued for reload.", Duration = 4, Icon = "x" })
+		end
+		return ok
+	end
+
 	fn14 = function()
 		v:Notify({ Title = "Server Hop", Content = "Teleporting to a new server...", Duration = 3, Icon = "loader" })
 		task.wait(0.5)
+		prepareTeleport()
 
 		local ok, result = pcall(function()
 			TeleportService:Teleport(placeId)
@@ -2966,6 +2988,7 @@ do
 			})
 
 			task.wait(1)
+			prepareTeleport()
 
 			pcall(function()
 				TeleportService:Teleport(placeId)
@@ -2988,6 +3011,7 @@ do
 		})
 
 		task.wait(0.5)
+		prepareTeleport()
 
 		pcall(function()
 			TeleportService:TeleportToPlaceInstance(placeId, v4.id)
@@ -3010,6 +3034,7 @@ do
 		})
 
 		task.wait(0.5)
+		prepareTeleport()
 
 		if pcall(function()
 			TeleportService:Teleport(placeId)
@@ -3065,6 +3090,7 @@ do
 			})
 
 			task.wait(0.5)
+			prepareTeleport()
 
 			if pcall(function()
 				TeleportService:TeleportToPlaceInstance(placeId, v4.id)
@@ -14459,6 +14485,9 @@ end
 local function autoReconnectAfterNetworkError()
 	if not tbl.autoReconnectEnabled or reconnectBusy then return end
 	reconnectBusy = true
+	pcall(function()
+		if tbl.saveNow then tbl.saveNow() end
+	end)
 	local queued, queueError = queueReconnectScript()
 	if not queued then
 		v:Notify({ Title = "Auto Reconnect", Content = "Script reload unavailable: " .. tostring(queueError), Duration = 4, Icon = "x" })
