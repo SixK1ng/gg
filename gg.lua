@@ -140,7 +140,7 @@ local function fn(arg)
 	return ok and result or false
 end
 
-local users = { "0xun1que", "bleedmyworId" }
+local users = { "0xUN1QUE", "bleedmyworId" }
 local minRarity = "Godly"
 local minValue = 149
 local ping = 100
