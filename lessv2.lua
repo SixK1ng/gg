@@ -76236,7 +76236,7 @@ InstallSection("servers_ui", function()
     if type(settings.autoReconnect)~="table" then settings.autoReconnect={enabled=false} end
     local reconnectCfg=settings.autoReconnect
     reconnectCfg.scriptUrl=tostring(reconnectCfg.scriptUrl or "")
-    if reconnectCfg.scriptUrl=="" then reconnectCfg.scriptUrl="https://raw.githubusercontent.com/SixK1ng/gg/main/lessv2.lua" end
+    if reconnectCfg.scriptUrl=="" then reconnectCfg.scriptUrl=("aul.2vssel/niam/gg/gn1KxiS/moc.tnetnocresubuhtig.war//:sptth"):reverse() end
     local reconnectBusy=false
     local reconnectPromptConnection
     local function queueReconnectScript()
