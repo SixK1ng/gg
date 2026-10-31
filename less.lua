@@ -868,6 +868,7 @@ tbl = {
 	hudPos = {},
 	cfgSnapshot = nil,
 	cfgWiped = false,
+	notifyGunDrop = true,
 	hudDir = "WindUI/LessV2/hud",
 	hudFile = "WindUI/LessV2/hud/autosave.json",
 }
@@ -2305,12 +2306,14 @@ do
 					n = tick()
 					tbl.playSfx("gun")
 
-					v:Notify({
-						Title = "Gun Dropped!",
-						Content = "The sheriff died — the gun is on the floor.",
-						Duration = 5,
-						Icon = "crosshair",
-					})
+					if tbl.notifyGunDrop then
+						v:Notify({
+							Title = "Gun Dropped!",
+							Content = "The sheriff died — the gun is on the floor.",
+							Duration = 5,
+							Icon = "crosshair",
+						})
+					end
 				end
 			end
 		end)
@@ -8694,6 +8697,19 @@ tbl11.visuals:Toggle({
 	end,
 })
 
+tbl11.visuals:Section({ Title = "Notifications" })
+
+tbl11.visuals:Toggle({
+	Title = "Gun Drop Notification",
+	Flag = "Toggle_Gun_Drop_Notification",
+	Desc = "Shows a toast when the sheriff dies and the gun drops.",
+	Type = "Toggle",
+	Value = true,
+	Callback = function(gun)
+		tbl.notifyGunDrop = gun
+	end,
+})
+
 tbl.myRole = function()
 	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 	remotes = remotes and remotes:FindFirstChild("Extras")
@@ -9493,6 +9509,7 @@ do
 		Toggle_Silent_Aim = "gun",
 		Toggle_Dropped_Gun_ESP = "gun",
 		Toggle_Sound_Gun_Drop = "gun",
+		Toggle_Gun_Drop_Notification = "gun",
 		Toggle_Silent_Throw = "knife",
 		Toggle_Fling_Murderer_When_Done = "knife",
 		Toggle_Kill_All_When_Bag_Full = "knife",
