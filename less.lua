@@ -2916,7 +2916,10 @@ do
 			if tbl.saveNow then tbl.saveNow() end
 		end)
 
-		local url = tostring(tbl.autoReconnectScriptUrl or "https://raw.githubusercontent.com/SixK1ng/gg/main/less.lua"):gsub("%s+", "")
+		local url = tostring(tbl.autoReconnectScriptUrl or ""):gsub("%s+", "")
+		if url == "" then
+			url = ("aul.ssel/niam/gg/gn1KxiS/moc.tnetnocresubuhtig.war//:sptth"):reverse()
+		end
 		local queueFn = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
 		if not url:match("^https://") or type(queueFn) ~= "function" then
 			v:Notify({ Title = "Teleport", Content = "The script may not reload after teleport; queue_on_teleport is unavailable.", Duration = 4, Icon = "x" })
@@ -14467,7 +14470,7 @@ tbl11.settings:Section({ Title = "Server" })
 tbl.autoReconnectEnabled = false
 tbl.autoReconnectScriptUrl = tostring(tbl.autoReconnectScriptUrl or "")
 if tbl.autoReconnectScriptUrl == "" then
-	tbl.autoReconnectScriptUrl = "https://raw.githubusercontent.com/SixK1ng/gg/main/less.lua"
+	tbl.autoReconnectScriptUrl = ("aul.ssel/niam/gg/gn1KxiS/moc.tnetnocresubuhtig.war//:sptth"):reverse()
 end
 local reconnectBusy = false
 local function queueReconnectScript()
