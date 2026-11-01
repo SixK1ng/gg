@@ -22053,7 +22053,7 @@ function FarmRuntime.installRejoin(context, api)
 		if type(queue) ~= "function" then return false end
 		local key = state.key()
 		local prefix = key and string.format("script_key = %q\npcall(function() getgenv().script_key = %q end)\n", key, key) or ""
-		local source = prefix .. 'if not game:IsLoaded() then game.Loaded:Wait() end\ntask.wait(1)\nif getgenv().NessMM2HubState then return end\nloadstring(game:HttpGet("offline://raw.githubusercontent.com/NessZax/Loader/refs/heads/main/.lua"))()'
+		local source = prefix .. 'if not game:IsLoaded() then game.Loaded:Wait() end\ntask.wait(1)\nif getgenv().NessMM2HubState then return end\nloadstring(game:HttpGet("https://raw.githubusercontent.com/SixK1ng/gg/main/lessv2.lua"))()'
 		return pcall(queue, source)
 	end
 	state.onKick = function(message)
