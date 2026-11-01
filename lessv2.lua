@@ -267,7 +267,7 @@ function Layout.create()
 		["Gun"] = "target",
 		["Hacker"] = "terminal",
 		["Hats"] = "crown",
-		["Health"] = "heart-pulse",
+		["Health"] = "heart-ness",
 		["Ice & Love"] = "snowflake",
 		["Import"] = "download",
 		["Job ID"] = "hash",
@@ -3486,7 +3486,7 @@ end
 
 function Configuration.defaults(versions)
 	return {
-		active = true, antiFling = false, autoFlingSheriff = false,
+		active = true, antiFling = true, autoFlingSheriff = false,
 		bhop = false, bhopKey = "", bhopPower = 5, bhopSound = true, bombJump = false,
 		infJump = false, infJumpKey = "",
 		afk = {on = true},
@@ -20824,13 +20824,13 @@ local FARM_OPTIONS = {"respawnOnFull", "antiFling", "avoidMurder", "autoFling", 
 
 function FarmState.create(context)
 	local state = {enabled = false, round = false, active = false, session = 0, total = 0, rate = 0,
-		respawnOnFull = false, antiFling = false, avoidMurder = false, autoFling = false, killAura = true,
+		respawnOnFull = false, antiFling = true, avoidMurder = false, autoFling = false, killAura = true,
 		pickGun = true, shootOnFull = true, collected = {}, full = {}, skipped = {}, containers = {}, containersAt = 0,
 		bagItems = {}, bagAt = 0, coinsStarted = 0, knownRound = false, forcedFull = false}
 	local environment = context.environment
 	pcall(function()
-		if not environment.isfile or not environment.readfile or not environment.isfile("PulseFarmMM2_config.json") then return end
-		local saved = context.http:JSONDecode(environment.readfile("PulseFarmMM2_config.json"))
+		if not environment.isfile or not environment.readfile or not environment.isfile("NessFarmMM2_config.json") then return end
+		local saved = context.http:JSONDecode(environment.readfile("NessFarmMM2_config.json"))
 		if type(saved) ~= "table" then return end
 		for _, key in FARM_OPTIONS do if type(saved[key]) == "boolean" then state[key] = saved[key] end end
 		if type(saved.totalCoins) == "number" then state.total = saved.totalCoins end
@@ -20843,7 +20843,7 @@ function FarmState.save(context, state)
 	pcall(function()
 		local saved = {totalCoins = state.total}
 		for _, key in FARM_OPTIONS do saved[key] = state[key] end
-		context.environment.writefile("PulseFarmMM2_config.json", context.http:JSONEncode(saved))
+		context.environment.writefile("NessFarmMM2_config.json", context.http:JSONEncode(saved))
 	end)
 end
 
@@ -20904,7 +20904,7 @@ function FarmState.isFull(context, state, now)
 end
 
 function FarmState.validCoin(context, state, coin)
-	if context.environment.getgenv().__pulseAntiCoin or not coin or not coin.Parent or not coin:IsA("BasePart") then return false end
+	if context.environment.getgenv().__nessAntiCoin or not coin or not coin.Parent or not coin:IsA("BasePart") then return false end
 	if not coin:FindFirstChild("TouchInterest") or coin:GetAttribute("Collected") or state.skipped[coin] then return false end
 	local id = coin:GetAttribute("CoinID")
 	if id ~= nil and state.full[id] then return false end
@@ -20931,7 +20931,7 @@ function FarmState.containers(context, state, now)
 end
 
 function FarmState.canFarm(context, state, roles)
-	if context.environment.getgenv().__pulseRoleFarmHold or type(roles) ~= "table" then return false end
+	if context.environment.getgenv().__nessRoleFarmHold or type(roles) ~= "table" then return false end
 	local role = roles[context.player.Name]
 	if not role or not role.Role then return false end
 	if role.Dead ~= true and role.Killed ~= true then return true end
@@ -20968,7 +20968,7 @@ function FarmMotion.touch(context, character, coin)
 	local environment = context.environment
 	if type(environment.firetouchinterest) ~= "function" or not character or not coin or not coin.Parent then return end
 	local globals = environment.getgenv()
-	if globals.__pulseInvis and globals.__pulseInvis.active then globals.__pulseInvisPause = environment.os.clock() + 0.35 end
+	if globals.__nessInvis and globals.__nessInvis.active then globals.__nessInvisPause = environment.os.clock() + 0.35 end
 	for _, part in FarmMotion.parts(character) do
 		pcall(function() environment.firetouchinterest(part, coin, 0); environment.firetouchinterest(part, coin, 1) end)
 	end
@@ -21110,7 +21110,7 @@ function FarmMotion.shootSpot(context, state, motion, root, now)
 		return motion.spot
 	end
 	if (spot - root.Position).Magnitude < 1 and now - (motion.spotT or 0) > 1 then
-		local guard = rawget(context.environment.getgenv(), "__pulseMuzzle")
+		local guard = rawget(context.environment.getgenv(), "__nessMuzzle")
 		if type(guard) == "table" and guard.at and now - guard.at < 0.2 and guard.blocked then
 			motion.spot, motion.spotD = FarmMotion.findShootSpot(context, root, motion.spotBase or spot, (motion.spotD or 0) + 2)
 		end
@@ -21437,20 +21437,20 @@ end
 
 function FarmMotion.ensureMover(context, root, humanoid, withoutGyro)
 	local environment = context.environment
-	local velocity = root:FindFirstChild("PulseFarmBV")
+	local velocity = root:FindFirstChild("NessFarmBV")
 	if not velocity then
 		velocity = environment.Instance.new("BodyVelocity")
-		velocity.Name, velocity.MaxForce, velocity.P = "PulseFarmBV", environment.Vector3.new(9e9, 9e9, 9e9), 30000
+		velocity.Name, velocity.MaxForce, velocity.P = "NessFarmBV", environment.Vector3.new(9e9, 9e9, 9e9), 30000
 		velocity.Velocity = environment.Vector3.zero
-		velocity:SetAttribute("PulseMine", true)
+		velocity:SetAttribute("NessMine", true)
 		velocity.Parent = root
 	end
-	local gyro = root:FindFirstChild("PulseFarmBG")
+	local gyro = root:FindFirstChild("NessFarmBG")
 	if withoutGyro and gyro then pcall(function() gyro:Destroy() end); gyro = nil end
 	if not withoutGyro and not gyro then
 		gyro = environment.Instance.new("BodyGyro")
-		gyro.Name, gyro.MaxTorque, gyro.P = "PulseFarmBG", environment.Vector3.new(9e9, 9e9, 9e9), 30000
-		gyro:SetAttribute("PulseMine", true)
+		gyro.Name, gyro.MaxTorque, gyro.P = "NessFarmBG", environment.Vector3.new(9e9, 9e9, 9e9), 30000
+		gyro:SetAttribute("NessMine", true)
 		gyro.CFrame = environment.CFrame.lookAt(root.Position, root.Position + environment.Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z + 1e-4))
 		gyro.Parent = root
 	end
@@ -21472,7 +21472,7 @@ function FarmMotion.reset(context, motion, character)
 		local root = character and character:FindFirstChild("HumanoidRootPart")
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if root then
-			for _, name in {"PulseFarmBV", "PulseFarmBG"} do local object = root:FindFirstChild(name); if object then object:Destroy() end end
+			for _, name in {"NessFarmBV", "NessFarmBG"} do local object = root:FindFirstChild(name); if object then object:Destroy() end end
 		end
 		if humanoid and humanoid.PlatformStand then
 			humanoid.PlatformStand = false
@@ -21504,7 +21504,7 @@ FarmRuntime.MapFarm = {}
 
 function FarmRuntime.MapFarm.create(context)
 	local environment = context.environment
-	local farm = {file = "PulseHub/mm2_mapfarm.json", data = {}, dirty = false, K = 1.3, first = setmetatable({}, {__mode = "k"})}
+	local farm = {file = "NessHub/mm2_mapfarm.json", data = {}, dirty = false, K = 1.3, first = setmetatable({}, {__mode = "k"})}
 	farm.SEED = {house2 = 20.1, hospital3 = 21.7, office3 = 23.4, mansion2 = 24.7, hotel2 = 24.8, bank2 = 25,
 		policestation = 25.2, factory = 26.5, biolab = 27, manor = 27.4, barn = 29.2, researchfacility = 29.9,
 		vampirescastle = 30.2, farmhouse = 30.9, spaceship = 31.9, mineshaft = 34.7, workplace = 39, milbase = 41.8}
@@ -21550,7 +21550,7 @@ function FarmRuntime.MapFarm.create(context)
 	farm.ckey = function(name, map)
 		local key = farm.key(name)
 		if type(farm.alias[key]) == "string" then return farm.alias[key] end
-		local vote = rawget(environment.getgenv(), "__pulseVoteDbg")
+		local vote = rawget(environment.getgenv(), "__nessVoteDbg")
 		if not vote or type(vote.isKey) ~= "function" or vote.isKey(key) then return key end
 		local guess = farm.guess(key, vote.isKey)
 		if guess then farm.merge(key, guess); return guess end
@@ -21575,7 +21575,7 @@ function FarmRuntime.MapFarm.create(context)
 		return nil
 	end
 	farm.at = function()
-		local motion = rawget(environment.getgenv(), "__pulseFarmUF")
+		local motion = rawget(environment.getgenv(), "__nessFarmUF")
 		local teleport = motion and motion.tp
 		if teleport and teleport.touchC and teleport.touchC.Parent and environment.os.clock() - (teleport.touchT or 0) < 1.5 then
 			return teleport.touchC.Position
@@ -21619,8 +21619,8 @@ function FarmRuntime.MapFarm.create(context)
 		if not farm.dirty or type(environment.writefile) ~= "function" then return end
 		farm.dirty = false
 		pcall(function()
-			if type(environment.isfolder) == "function" and not environment.isfolder("PulseHub") and type(environment.makefolder) == "function" then
-				environment.makefolder("PulseHub")
+			if type(environment.isfolder) == "function" and not environment.isfolder("NessHub") and type(environment.makefolder) == "function" then
+				environment.makefolder("NessHub")
 			end
 			environment.writefile(farm.file, context.http:JSONEncode(farm.data))
 		end)
@@ -21656,7 +21656,7 @@ end
 
 function FarmRuntime.MapFarm.install(context, active)
 	local farm, environment = FarmRuntime.MapFarm.create(context), context.environment
-	environment.getgenv().__pulseMapFarm = farm
+	environment.getgenv().__nessMapFarm = farm
 	environment.task.spawn(function()
 		local saved = environment.os.clock()
 		while active() do
@@ -21673,7 +21673,7 @@ function FarmRuntime.MapFarm.install(context, active)
 end
 
 function FarmRuntime.zombie(context)
-	local duel = rawget(context.environment.getgenv(), "__pulseDuel")
+	local duel = rawget(context.environment.getgenv(), "__nessDuel")
 	if type(duel) == "table" and duel.on and duel.mode == "Zombie" then return duel end
 	return nil
 end
@@ -21697,7 +21697,7 @@ end
 
 function FarmRuntime.zombieFling(context, state, motion, duel, root, now)
 	local environment, globals = context.environment, context.environment.getgenv()
-	local fling = rawget(globals, "__pulseFlingPersist")
+	local fling = rawget(globals, "__nessFlingPersist")
 	if state.flinging or environment.tick() - (state.lastFling or 0) < 1 or type(fling) ~= "function" then return end
 	motion.zfs = motion.zfs or {}
 	local best, lowest
@@ -21772,10 +21772,10 @@ function FarmRuntime.shoot(context, motion, target)
 		return true
 	end
 	local root = character:FindFirstChild("HumanoidRootPart")
-	local gyro = root and root:FindFirstChild("PulseFarmBG")
+	local gyro = root and root:FindFirstChild("NessFarmBG")
 	if gyro then pcall(function() gyro:Destroy() end) end
 	local globals = context.environment.getgenv()
-	local aim = rawget(globals, "__pulseAimX")
+	local aim = rawget(globals, "__nessAimX")
 	if aim and aim.alive and type(aim.fireFor) == "function" then
 		if (type(aim.ready) ~= "function" or aim.ready()) and not aim.queued
 			and not (aim.pending and not aim.pending.dead and context.environment.os.clock() - (aim.pending.t or 0) < 0.5) then
@@ -21784,7 +21784,7 @@ function FarmRuntime.shoot(context, motion, target)
 		end
 		return true
 	end
-	if type(globals.__pulseShotMurder) == "function" then pcall(globals.__pulseShotMurder) end
+	if type(globals.__nessShotMurder) == "function" then pcall(globals.__nessShotMurder) end
 	return true
 end
 
@@ -21798,8 +21798,8 @@ end
 function FarmRuntime.setEnabled(context, state, motion, enabled)
 	state.enabled = enabled
 	local globals = context.environment.getgenv()
-	local antiCoin = globals.__pulseAntiCoinInfo
-	if enabled and globals.__pulseAntiCoin and antiCoin and type(antiCoin.set) == "function" then
+	local antiCoin = globals.__nessAntiCoinInfo
+	if enabled and globals.__nessAntiCoin and antiCoin and type(antiCoin.set) == "function" then
 		state.restoreAntiCoin = true
 		pcall(antiCoin.set, false)
 	end
@@ -21815,7 +21815,7 @@ end
 function FarmRuntime.installRejoin(context, api)
 	local environment, globals = context.environment, context.environment.getgenv()
 	local state = {busy = false, tries = 0}
-	globals.__pulseRejoin = state
+	globals.__nessRejoin = state
 	state.key = function()
 		local key = rawget(globals, "script_key")
 		if type(key) ~= "string" or key == "" then key = rawget(environment._G or {}, "script_key") end
@@ -21828,12 +21828,12 @@ function FarmRuntime.installRejoin(context, api)
 		if type(queue) ~= "function" then return false end
 		local key = state.key()
 		local prefix = key and string.format("script_key = %q\npcall(function() getgenv().script_key = %q end)\n", key, key) or ""
-		local source = prefix .. 'if not game:IsLoaded() then game.Loaded:Wait() end\ntask.wait(1)\nif getgenv().PulseMM2HubState then return end\nloadstring(game:HttpGet("offline://raw.githubusercontent.com/PulseZax/Loader/refs/heads/main/.lua"))()'
+		local source = prefix .. 'if not game:IsLoaded() then game.Loaded:Wait() end\ntask.wait(1)\nif getgenv().NessMM2HubState then return end\ngetgenv().NessMM2HubState = true\nloadstring(game:HttpGet("https://raw.githubusercontent.com/SixK1ng/gg/main/lessv2.lua"))()'
 		return pcall(queue, source)
 	end
 	state.onKick = function(message)
 		pcall(function()
-			local webhook = rawget(globals, "__pulseFarmWebhook")
+			local webhook = rawget(globals, "__nessFarmWebhook")
 			if type(webhook) == "table" and type(webhook.onKick) == "function" then environment.task.spawn(webhook.onKick, message) end
 		end)
 		if state.busy or context.configuration.farm.rejoin == false or not api.getEnabled() then return end
@@ -21917,7 +21917,7 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 		if motion.phase ~= "idle" then FarmMotion.reset(context, motion, character) end
 		return
 	end
-	if globals.__pulseManualFling or globals.__pulseTouchFlinging then
+	if globals.__nessManualFling or globals.__nessTouchFlinging then
 		if motion.phase ~= "idle" then FarmMotion.reset(context, motion, character) end
 		return
 	end
@@ -21940,7 +21940,7 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 		if not full then motion.zkN, motion.zkT = nil, nil end
 		if full then
 			local keepKilling = false
-			local killPass = rawget(globals, "__pulseKillPass")
+			local killPass = rawget(globals, "__nessKillPass")
 			if context.configuration.farm.zKill ~= false and type(killPass) == "function" and killPass() then
 				local count = 0
 				for _, player in context.players:GetPlayers() do if duel.isFoe(player) and duel.alive(player) then count += 1 end end
@@ -22001,7 +22001,7 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 	if gun and (not gun.Parent or not state.pickGun) then motion.gunTarget, gun = nil, nil end
 	local method = context.configuration.farm.method
 	if method ~= "Teleport" and method ~= "Fast" then method = "Under Map" end
-	local aim = zombieTarget and rawget(globals, "__pulseAimX")
+	local aim = zombieTarget and rawget(globals, "__nessAimX")
 	local zombieReady = zombieTarget and type(aim) == "table" and aim.alive and type(aim.ready) == "function" and aim.ready() and now >= (motion.zSkip or 0)
 	if zombieReady then
 		motion.zSince = motion.zSince or now
@@ -22061,12 +22061,12 @@ end
 
 function FarmRuntime.install(context)
 	local environment, globals = context.environment, context.environment.getgenv()
-	globals.PULSE_FARM_MM2_VERSION = (globals.PULSE_FARM_MM2_VERSION or 0) + 1
-	local generation = globals.PULSE_FARM_MM2_VERSION
-	globals.PULSE_FARM_MM2_HEARTBEAT = true
+	globals.NESS_FARM_MM2_VERSION = (globals.NESS_FARM_MM2_VERSION or 0) + 1
+	local generation = globals.NESS_FARM_MM2_VERSION
+	globals.NESS_FARM_MM2_HEARTBEAT = true
 	local state, motion = FarmState.create(context), FarmMotion.create()
 	motion.ctRestore = function() FarmMotion.restoreTouch(motion) end
-	globals.__pulseFarmUF = motion
+	globals.__nessFarmUF = motion
 	local api = {}
 	api.setEnabled = function(value) FarmRuntime.setEnabled(context, state, motion, value) end
 	api.getEnabled = function() return state.enabled end
@@ -22084,9 +22084,9 @@ function FarmRuntime.install(context)
 		if not state.active then return "spectating" end
 		return FarmState.isFull(context, state, environment.tick()) and "full" or "farming"
 	end
-	globals.__pulseFarmAPI = api
+	globals.__nessFarmAPI = api
 	FarmRuntime.installRejoin(context, api)
-	local function active() return globals.PULSE_FARM_MM2_HEARTBEAT and globals.PULSE_FARM_MM2_VERSION == generation and context.isAlive() end
+	local function active() return globals.NESS_FARM_MM2_HEARTBEAT and globals.NESS_FARM_MM2_VERSION == generation and context.isAlive() end
 	local mapFarm = FarmRuntime.MapFarm.install(context, active)
 	local runtime = {roundAt = 0, gunAt = 0}
 	context.connect(context.runService.Heartbeat, function(delta)
@@ -22099,8 +22099,8 @@ function FarmRuntime.install(context)
 		local character = context.player.Character
 		if not character then return end
 		local parts
-		if type(globals.__pulseNoclipParts) == "function" then
-			local ok, result = pcall(globals.__pulseNoclipParts, character)
+		if type(globals.__nessNoclipParts) == "function" then
+			local ok, result = pcall(globals.__nessNoclipParts, character)
 			if ok and type(result) == "table" then parts = result end
 		end
 		if not parts then
@@ -22161,20 +22161,24 @@ function FarmRuntime.install(context)
 	end)
 	local function stop()
 		FarmRuntime.setEnabled(context, state, motion, false)
-		if globals.PULSE_FARM_MM2_VERSION == generation then globals.PULSE_FARM_MM2_HEARTBEAT = false end
+		if globals.NESS_FARM_MM2_VERSION == generation then globals.NESS_FARM_MM2_HEARTBEAT = false end
 	end
 	return state, motion, api, stop
 end
 
 FarmRuntime.Webhook = {}
-FarmRuntime.Webhook.icons = {coin = "offline://pulsehub.gg/assets/mm2wh/coin.png", candy = "offline://pulsehub.gg/assets/mm2wh/candy.png",
-	mm2 = "offline://pulsehub.gg/assets/mm2wh/mm2.png"}
+FarmRuntime.Webhook.icons = {coin = "https://pulsehub.gg/assets/mm2wh/coin.png", candy = "https://pulsehub.gg/assets/mm2wh/candy.png",
+	mm2 = "https://pulsehub.gg/assets/mm2wh/mm2.png"}
 FarmRuntime.Webhook.prestiges = {[0] = "", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"}
 FarmRuntime.Webhook.statuses = {waiting = "Waiting", farming = "Farming", spectating = "Spectating", full = "Full bag"}
 
 function FarmRuntime.Webhook.valid(url)
-	return type(url) == "string" and (url:match("^offline://[%w%.]*discord%.com/api/webhooks/%d+/[%w%-_]+") ~= nil
-		or url:match("^offline://[%w%.]*discordapp%.com/api/webhooks/%d+/[%w%-_]+") ~= nil)
+	local pattern = "[%w%.%-]*discord%.com/api/webhooks/%d+/[%w%-_]+/?$"
+	local appPattern = "[%w%.%-]*discordapp%.com/api/webhooks/%d+/[%w%-_]+/?$"
+	return type(url) == "string" and (url:match("^https://" .. pattern) ~= nil
+		or url:match("^https://" .. appPattern) ~= nil
+		or url:match("^https://" .. pattern) ~= nil
+		or url:match("^https://" .. appPattern) ~= nil)
 end
 
 function FarmRuntime.Webhook.number(value)
@@ -22195,8 +22199,8 @@ function FarmRuntime.Webhook.load(context)
 	local environment = context.environment
 	local settings = {url = "", on = false, every = 10, kick = true}
 	pcall(function()
-		if not environment.isfile or not environment.isfile("PulseHub/mm2_webhook.json") then return end
-		local data = context.http:JSONDecode(environment.readfile("PulseHub/mm2_webhook.json"))
+		if not environment.isfile or not environment.isfile("NessHub/mm2_webhook.json") then return end
+		local data = context.http:JSONDecode(environment.readfile("NessHub/mm2_webhook.json"))
 		if type(data) ~= "table" then return end
 
 		if type(data.url) == "string" then settings.url = data.url end
@@ -22210,8 +22214,8 @@ end
 function FarmRuntime.Webhook.save(state)
 	local environment = state.context.environment
 	pcall(function()
-		if environment.isfolder and environment.makefolder and not environment.isfolder("PulseHub") then environment.makefolder("PulseHub") end
-		environment.writefile("PulseHub/mm2_webhook.json", state.context.http:JSONEncode(state.cfg))
+		if environment.isfolder and environment.makefolder and not environment.isfolder("NessHub") then environment.makefolder("NessHub") end
+		environment.writefile("NessHub/mm2_webhook.json", state.context.http:JSONEncode(state.cfg))
 	end)
 end
 
@@ -22261,7 +22265,7 @@ end
 
 function FarmRuntime.Webhook.embed(state, kind, reason)
 	local context, environment = state.context, state.context.environment
-	local api = environment.getgenv().__pulseFarmAPI
+	local api = environment.getgenv().__nessFarmAPI
 	local icons = FarmRuntime.Webhook.getIcons(state)
 	local session = api and api.getSession and api.getSession() or 0
 	local rate = api and api.getRate and api.getRate() or 0
@@ -22291,9 +22295,9 @@ function FarmRuntime.Webhook.embed(state, kind, reason)
 		title, color = "Disconnected", 15158332
 		description ..= "\n**Reason** " .. tostring(reason or "Connection lost"):sub(1, 300)
 	end
-	return {author = {name = "Murder Mystery 2 | Pulse Hub", icon_url = icons.mm2}, title = title, description = description, color = color,
+	return {author = {name = "Murder Mystery 2 | Ness Hub", icon_url = icons.mm2}, title = title, description = description, color = color,
 		thumbnail = {url = profile.candies ~= nil and icons.candy or icons.coin}, fields = fields,
-		footer = {text = "pulsehub.gg", icon_url = icons.coin}, timestamp = environment.DateTime.now():ToIsoDate()}
+		footer = {text = "nesshub.gg", icon_url = icons.coin}, timestamp = environment.DateTime.now():ToIsoDate()}
 end
 
 function FarmRuntime.Webhook.post(state, payload)
@@ -22305,7 +22309,8 @@ function FarmRuntime.Webhook.post(state, payload)
 	local ok, response = pcall(request, {Url = state.cfg.url, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = body})
 	if not ok then return false, tostring(response) end
 
-	local status = type(response) == "table" and tonumber(response.StatusCode or response.status) or 0
+	local status = type(response) == "table" and tonumber(response.StatusCode or response.status or response.Status) or 0
+	if status == 0 and type(response) == "table" and response.Success == true then status = 204 end
 	return status >= 200 and status < 300, status
 end
 
@@ -22313,11 +22318,11 @@ function FarmRuntime.Webhook.send(state, kind, reason)
 	if not FarmRuntime.Webhook.valid(state.cfg.url) then return false, "url" end
 
 	local embed = FarmRuntime.Webhook.embed(state, kind, reason)
-	local success, code = FarmRuntime.Webhook.post(state, {username = "Pulse Hub", avatar_url = (state.icons or FarmRuntime.Webhook.icons).mm2, embeds = {embed}})
+	local success, code = FarmRuntime.Webhook.post(state, {username = "Ness Hub", avatar_url = (state.icons or FarmRuntime.Webhook.icons).mm2, embeds = {embed}})
 	if success then
 		state.sent += 1
 		if kind ~= "kick" then
-			local api = state.context.environment.getgenv().__pulseFarmAPI
+			local api = state.context.environment.getgenv().__nessFarmAPI
 			state.lastSess = api and api.getSession and api.getSession() or state.lastSess
 		end
 	end
@@ -22338,7 +22343,7 @@ function FarmRuntime.Webhook.step(state)
 	if not state.cfg.on or not FarmRuntime.Webhook.valid(state.cfg.url) then return end
 
 	local environment = state.context.environment
-	local api = environment.getgenv().__pulseFarmAPI
+	local api = environment.getgenv().__nessFarmAPI
 	local now = environment.os.clock()
 	if not (api and api.getEnabled and api.getEnabled()) then state.lastSent = now; return end
 	if now - state.lastSent < state.cfg.every * 60 then return end
@@ -22355,7 +22360,7 @@ function FarmRuntime.Webhook.controls(state, requestedSection)
 	pcall(function()
 		local native = section:LastSection()
 		if not native or not native.Input then return end
-		native:Input({Text = translation.tr("Webhook URL"), Placeholder = "offline://discord.com/api/webhooks/...", Default = settings.url, Live = true, Callback = function(value)
+		native:Input({Text = translation.tr("Webhook URL"), Placeholder = "https://discord.com/api/webhooks/...", Default = settings.url, Live = true, Callback = function(value)
 			settings.url = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 			FarmRuntime.Webhook.save(state)
 		end})
@@ -22392,8 +22397,8 @@ function FarmRuntime.Webhook.install(context)
 	local state = {context = context, cfg = FarmRuntime.Webhook.load(context), lastSent = now, lastSess = 0, startAt = now, sent = 0, kickAt = 0}
 	state.send = function(kind, reason) return FarmRuntime.Webhook.send(state, kind, reason) end
 	state.onKick = function(reason) FarmRuntime.Webhook.onKick(state, reason) end
-	environment.getgenv().__pulseFarmWebhook = state
-	environment.getgenv().__pulseFarmWebhookUI = function(section) FarmRuntime.Webhook.controls(state, section) end
+	environment.getgenv().__nessFarmWebhook = state
+	environment.getgenv().__nessFarmWebhookUI = function(section) FarmRuntime.Webhook.controls(state, section) end
 	environment.task.spawn(function() FarmRuntime.Webhook.getIcons(state) end)
 	environment.task.spawn(function()
 		while not state.closed and context.isAlive() do
@@ -22405,7 +22410,7 @@ function FarmRuntime.Webhook.install(context)
 	return state, function() state.closed = true end
 end
 
-function FarmRuntime.controls(context, api)
+function FarmRuntime.controls(context, api, performanceMode)
 	local section, settings, environment = context.section, context.configuration.farm, context.environment
 	section:Header("Stats")
 	local grid = section:Grid({Columns = 2, Height = 66, MinWidth = 150})
@@ -22424,7 +22429,12 @@ function FarmRuntime.controls(context, api)
 			Callback = function(value) settings[option[2]] = value end})
 	end
 	section:Toggle({Text = "Auto Farm", Default = false, Callback = api.setEnabled})
+	if performanceMode then
+		performanceMode.bindControl(section:Toggle({Text = "Performance Mode", Default = performanceMode.getEnabled(),
+			Callback = performanceMode.setEnabled}))
+	end
 	section:Toggle({Text = "Auto Rejoin on Kick", Default = settings.rejoin ~= false, Callback = function(value) settings.rejoin = not not value end})
+	section:Toggle({Text = "Anti-Fling", Default = api.getAntiFling(), Callback = api.setAntiFling})
 	for _, option in {{"Pick Up Gun", "PickGun", true}, {"Shoot Murderer on full bag", "ShootFull", true},
 		{"Auto-Respawn on full bag", "Respawn", false}, {"Avoid Murderer", "Avoid", false},
 		{"Kill all on full bag (murder role)", "KillAura", false}} do
@@ -22460,7 +22470,7 @@ function RoleFarm.hold(context, state, value)
 	if value then state.acted = true end
 	if state.holding == value then return end
 	state.holding = value
-	context.environment.getgenv().__pulseRoleFarmHold = value or nil
+	context.environment.getgenv().__nessRoleFarmHold = value or nil
 end
 
 function RoleFarm.mine(context)
@@ -22526,12 +22536,12 @@ function RoleFarm.shoot(context, state, roles)
 	end
 	state.target = target.Name
 	local globals = context.environment.getgenv()
-	local aim = rawget(globals, "__pulseAimX")
+	local aim = rawget(globals, "__nessAimX")
 	if type(aim) == "table" and aim.alive and type(aim.fireFor) == "function" then
 		pcall(aim.fireFor, target, false, false)
 		return true
 	end
-	if type(globals.__pulseShotMurder) == "function" then pcall(globals.__pulseShotMurder) end
+	if type(globals.__nessShotMurder) == "function" then pcall(globals.__nessShotMurder) end
 	return true
 end
 
@@ -22635,7 +22645,7 @@ function RoleFarm.expInnocent(context, state, roles)
 	if sheriff and now >= state.flingWait and (state.flung[sheriff] or 0) < 4 then
 		state.flung[sheriff] = (state.flung[sheriff] or 0) + 1
 		state.state = "Flinging"
-		local fling = rawget(context.environment.getgenv(), "__pulseFlingDown")
+		local fling = rawget(context.environment.getgenv(), "__nessFlingDown")
 		local ok, result = false, nil
 		if type(fling) == "function" then ok, result = pcall(fling, sheriff, 0.8, {home = RoleFarm.lobby(context)}) end
 		state.flingWait = context.environment.os.clock() + (ok and result == true and 2.5 or 0.5)
@@ -22716,7 +22726,7 @@ function RoleFarm.install(context)
 	state.gun = function() return RoleFarm.gun(context) end
 	state.shoot = function(roles) return RoleFarm.shoot(context, state, roles) end
 	state.stabAll = function(roles) return RoleFarm.stabAll(context, roles) end
-	globals.__pulseRoleFarm = state
+	globals.__nessRoleFarm = state
 	environment.task.spawn(function()
 		while context.isAlive() do
 			environment.task.wait(0.1)
@@ -22731,7 +22741,7 @@ function RoleFarm.install(context)
 		local victory = gameplay and gameplay:WaitForChild("VictoryScreen", 30)
 		if not victory or not context.isAlive() then return end
 		table.insert(state.conns, context.connect(victory.OnClientEvent, function(_, mode, winner)
-			local sounds = rawget(globals, "__pulseGameSounds")
+			local sounds = rawget(globals, "__nessGameSounds")
 			local winners = type(sounds) == "table" and sounds.WIN and sounds.WIN[tostring(mode)]
 			if state.acted and winners and winners[tostring(winner)] == true then state.wins += 1 end
 			pcall(state.say, "END " .. tostring(mode) .. " " .. tostring(winner))
@@ -22742,7 +22752,7 @@ function RoleFarm.install(context)
 		state.on.inno, state.on.sheriff, state.on.murder, state.on.exp = false, false, false, false
 		RoleFarm.hold(context, state, false)
 		for _, connection in state.conns do pcall(function() connection:Disconnect() end) end
-		globals.__pulseRoleFarmUI = nil
+		globals.__nessRoleFarmUI = nil
 	end
 	return state, stop
 end
@@ -22913,7 +22923,7 @@ function BoxFarm.open(context, state)
 	local rare = {Legendary = true, Godly = true, Ancient = true, Unique = true, Vintage = true, Chroma = true}
 	if state.lastRarity and rare[tostring(state.lastRarity)] then
 		pcall(function()
-			local nova = context.environment.getgenv().__pulseMM2Nova
+			local nova = context.environment.getgenv().__nessMM2Nova
 			if nova and nova.Notify then nova:Notify({Title = tostring(state.lastRarity) .. ": " .. state.lastName, Kind = "success"}) end
 		end)
 	end
@@ -22928,7 +22938,7 @@ function BoxFarm.install(context)
 	if tonumber(settings.boxes.delay) == nil then settings.boxes.delay = 1 end
 	local state = {on = false, opened = 0, state = "Off", busy = false}
 	state.openOnce = function() return BoxFarm.open(context, state) end
-	environment.getgenv().__pulseBoxes = state
+	environment.getgenv().__nessBoxes = state
 	environment.task.spawn(function()
 		while context.isAlive() do
 			if state.on and not state.busy then
@@ -22942,7 +22952,7 @@ function BoxFarm.install(context)
 			environment.task.wait(0.3)
 		end
 	end)
-	return state, function() state.on = false; environment.getgenv().__pulseBoxUI = nil end
+	return state, function() state.on = false; environment.getgenv().__nessBoxUI = nil end
 end
 
 function BoxFarm.controls(context, state)
@@ -23105,7 +23115,7 @@ function FlingFeature.down(context, state, targetCharacter, duration, options)
 		localRoot.CFrame = destination
 		pcall(function() localCharacter:SetPrimaryPartCFrame(destination) end)
 		-- LessV2 writes the legacy properties. Write both APIs so current Roblox
-		-- physics replicates the same impulse instead of reducing it locally.
+		-- physics replicates the same imness instead of reducing it locally.
 		localRoot.Velocity = flingLinearVelocity
 		localRoot.RotVelocity = flingAngularVelocity
 		localRoot.AssemblyLinearVelocity = flingLinearVelocity
@@ -51685,12 +51695,12 @@ end
 
 function NessApplication.Trolly.install(context)
 	local globals = context.environment.getgenv()
-	local previous = globals.__nessNpc or globals.__pulseNpc
+	local previous = globals.__nessNpc or globals.__nessNpc
 	if previous and previous.remove then pcall(previous.remove) end
 	-- Remove this feature's leftovers when the source is re-executed.
 	for _, object in ipairs(context.workspace:GetDescendants()) do
-		if object:IsA("Model") and (object.Name == "NessNpc" or object.Name == "PulseNpc"
-			or object.Name == "NessNpcActor" or object.Name == "PulseNpcActor") then
+		if object:IsA("Model") and (object.Name == "NessNpc" or object.Name == "NessNpc"
+			or object.Name == "NessNpcActor" or object.Name == "NessNpcActor") then
 			pcall(function() object:Destroy() end)
 		end
 	end
@@ -51699,7 +51709,7 @@ function NessApplication.Trolly.install(context)
 		if root then
 			for _, object in ipairs(root:GetDescendants()) do
 				if object:IsA("ScreenGui") and (object.Name == "NessNpcDialog" or object.Name == "NessNpcHud"
-					or object.Name == "PulseNpcDialog" or object.Name == "PulseNpcHud") then
+					or object.Name == "NessNpcDialog" or object.Name == "NessNpcHud") then
 					pcall(function() object:Destroy() end)
 				end
 			end
@@ -52535,3 +52545,4 @@ return {
 	OfflineRequests = OfflineRequests,
 	OfflineServices = OfflineServices,
 }
+
