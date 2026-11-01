@@ -20826,12 +20826,11 @@ function FarmState.create(context)
 	local state = {enabled = false, round = false, active = false, session = 0, total = 0, rate = 0,
 		respawnOnFull = false, antiFling = false, avoidMurder = false, autoFling = false, killAura = true,
 		pickGun = true, shootOnFull = true, collected = {}, full = {}, skipped = {}, containers = {}, containersAt = 0,
-		containerMap = nil, bagItems = {}, bagAt = 0, coinsStarted = 0, sawCoins = false, knownRound = false, forcedFull = false,
-		roundCollected = 0, flingDoneFired = false, coinsLive = false, endedMap = nil}
+		bagItems = {}, bagAt = 0, coinsStarted = 0, knownRound = false, forcedFull = false}
 	local environment = context.environment
 	pcall(function()
-		if not environment.isfile or not environment.readfile or not environment.isfile("NessFarmMM2_config.json") then return end
-		local saved = context.http:JSONDecode(environment.readfile("NessFarmMM2_config.json"))
+		if not environment.isfile or not environment.readfile or not environment.isfile("PulseFarmMM2_config.json") then return end
+		local saved = context.http:JSONDecode(environment.readfile("PulseFarmMM2_config.json"))
 		if type(saved) ~= "table" then return end
 		for _, key in FARM_OPTIONS do if type(saved[key]) == "boolean" then state[key] = saved[key] end end
 		if type(saved.totalCoins) == "number" then state.total = saved.totalCoins end
@@ -20844,23 +20843,20 @@ function FarmState.save(context, state)
 	pcall(function()
 		local saved = {totalCoins = state.total}
 		for _, key in FARM_OPTIONS do saved[key] = state[key] end
-		context.environment.writefile("NessFarmMM2_config.json", context.http:JSONEncode(saved))
+		context.environment.writefile("PulseFarmMM2_config.json", context.http:JSONEncode(saved))
 	end)
 end
 
 function FarmState.roundStart(state, now, coinsStarted)
-	state.round, state.skipped, state.sawCoins = true, {}, false
-	state.endedMap = nil
+	state.round, state.skipped = true, {}
 	if not coinsStarted then state.collected = {} end
 	table.clear(state.full)
 	state.forcedFull, state.coinsStarted, state.knownRound = false, coinsStarted and now or 0, true
-	state.roundCollected, state.flingDoneFired, state.coinsLive = 0, false, coinsStarted == true
 	if not coinsStarted then state.active = false end
 end
 
 function FarmState.roundEnd(state)
-	state.round, state.active, state.collected, state.forcedFull, state.coinsStarted, state.sawCoins = false, false, {}, false, 0, false
-	state.roundCollected, state.flingDoneFired, state.flinging, state.coinsLive = 0, false, false, false
+	state.round, state.active, state.collected, state.forcedFull, state.coinsStarted = false, false, {}, false, 0
 end
 
 function FarmState.coinCollected(state, now, kind, count, maximum)
@@ -20874,10 +20870,7 @@ function FarmState.coinCollected(state, now, kind, count, maximum)
 		added = count >= previous and count - previous or count
 		state.collected[name] = count
 	end
-	if added > 0 then
-		state.session, state.total, state.roundCollected, state.dirty = state.session + added, state.total + added,
-			(state.roundCollected or 0) + added, true
-	end
+	if added > 0 then state.session, state.total, state.dirty = state.session + added, state.total + added, true end
 	return added
 end
 
@@ -20911,34 +20904,34 @@ function FarmState.isFull(context, state, now)
 end
 
 function FarmState.validCoin(context, state, coin)
-	if context.environment.getgenv().__nessAntiCoin or not coin or not coin.Parent or not coin:IsA("BasePart") then return false end
+	if context.environment.getgenv().__pulseAntiCoin or not coin or not coin.Parent or not coin:IsA("BasePart") then return false end
 	if not coin:FindFirstChild("TouchInterest") or coin:GetAttribute("Collected") or state.skipped[coin] then return false end
 	local id = coin:GetAttribute("CoinID")
 	if id ~= nil and state.full[id] then return false end
 	return true
 end
 
-function FarmState.map(context)
-	local activeMap
-	for _, object in context.workspace:GetChildren() do
-		if object:FindFirstChild("CoinAreas") or object:FindFirstChild("CoinContainer") then activeMap = object end
-	end
-	return activeMap
-end
-
 function FarmState.containers(context, state, now)
-	local activeMap = FarmState.map(context)
-	if now - state.containersAt < 0.5 and state.containerMap == activeMap then return state.containers end
-	state.containersAt, state.containerMap = now, activeMap
-	local containers = {}
-	local coinContainer = activeMap and activeMap:FindFirstChild("CoinContainer")
-	if coinContainer then table.insert(containers, coinContainer) end
+	if now - state.containersAt < 0.5 then return state.containers end
+	state.containersAt = now
+	local containers, seen = {}, {}
+	for _, object in context.workspace:GetChildren() do
+		local container = object:FindFirstChild("CoinContainer")
+		if container and not seen[container] then seen[container] = true; table.insert(containers, container) end
+	end
+	for _, coin in context.collection:GetTagged("ServerCoinPart") do
+		local container = coin.Parent
+		if container and not seen[container] and container ~= context.workspace and container:IsDescendantOf(context.workspace) then
+			seen[container] = true
+			table.insert(containers, container)
+		end
+	end
 	state.containers = containers
 	return containers
 end
 
 function FarmState.canFarm(context, state, roles)
-	if context.environment.getgenv().__nessRoleFarmHold or type(roles) ~= "table" then return false end
+	if context.environment.getgenv().__pulseRoleFarmHold or type(roles) ~= "table" then return false end
 	local role = roles[context.player.Name]
 	if not role or not role.Role then return false end
 	if role.Dead ~= true and role.Killed ~= true then return true end
@@ -20975,16 +20968,15 @@ function FarmMotion.touch(context, character, coin)
 	local environment = context.environment
 	if type(environment.firetouchinterest) ~= "function" or not character or not coin or not coin.Parent then return end
 	local globals = environment.getgenv()
-	if globals.__nessInvis and globals.__nessInvis.active then globals.__nessInvisPause = environment.os.clock() + 0.35 end
+	if globals.__pulseInvis and globals.__pulseInvis.active then globals.__pulseInvisPause = environment.os.clock() + 0.35 end
 	for _, part in FarmMotion.parts(character) do
 		pcall(function() environment.firetouchinterest(part, coin, 0); environment.firetouchinterest(part, coin, 1) end)
 	end
 end
 
 function FarmMotion.containers(context, state, motion, now)
-	local activeMap = FarmState.map(context)
-	if now - motion.containerAt > 1 or motion.containerMap ~= activeMap then
-		motion.containerAt, motion.containerMap = now, activeMap
+	if now - motion.containerAt > 1 then
+		motion.containerAt = now
 		motion.containers = FarmState.containers(context, state, now)
 	end
 	return motion.containers
@@ -21016,14 +21008,10 @@ end
 function FarmMotion.coinInfo(context, state, motion, coin, now)
 	if motion.info[coin] then return motion.info[coin] end
 	local position = coin.Position
-	local surface = FarmMotion.floor(context, state, motion, position, 0.5, 40, now)
-	local confirmedSurface = surface ~= nil
-	surface = surface or position.Y - 3
+	local surface = FarmMotion.floor(context, state, motion, position, 0.5, 40, now) or position.Y - 3
 	local hide = context.environment.Vector3.new(position.X, surface - 3.8, position.Z)
-	local minimumY = context.workspace.FallenPartsDestroyHeight + 50
-	local info = {surf = surface, hide = hide, exposed = FarmMotion.floor(context, state, motion, hide, 0, 7, now) ~= nil,
-		safeUnderMap = confirmedSurface and hide.Y > minimumY and position.Y > minimumY}
-	if confirmedSurface then motion.info[coin] = info end
+	local info = {surf = surface, hide = hide, exposed = FarmMotion.floor(context, state, motion, hide, 0, 7, now) ~= nil}
+	motion.info[coin] = info
 	return info
 end
 
@@ -21042,7 +21030,6 @@ function FarmMotion.choose(context, state, motion, position, murderer, now)
 		for _, coin in container:GetChildren() do
 			if not FarmState.validCoin(context, state, coin) or (motion.skip[coin] or 0) >= now or motion.pending[coin] then continue end
 			local info = FarmMotion.coinInfo(context, state, motion, coin, now)
-			if not info.safeUnderMap then continue end
 			local score = (info.hide - position).Magnitude + math.max(0, coin.Position.Y - info.hide.Y) * 1.2
 			if info.exposed then score += 25 end
 			score += FarmMotion.murderPenalty(state, coin.Position, murderer)
@@ -21066,99 +21053,6 @@ function FarmMotion.hideAt(context, state, motion, root, now)
 	if not floor then return root.Position end
 	local position = root.Position
 	return context.environment.Vector3.new(position.X, math.min(position.Y, floor - 3.8), position.Z)
-end
-
-function FarmMotion.spawnPosition(context)
-	local map = FarmState.map(context)
-	if not map then return nil end
-	local spawns = map:FindFirstChild("Spawns")
-	if spawns then
-		for _, spawn in spawns:GetChildren() do
-			if spawn:IsA("BasePart") then return spawn.Position end
-		end
-	end
-	local ok, pivot = pcall(function() return map:GetPivot() end)
-	return ok and pivot and pivot.Position or nil
-end
-
-function FarmMotion.returnToMap(context, character)
-	local map = FarmState.map(context)
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	local spawns = map and map:FindFirstChild("Spawns")
-	if not root or not spawns then return false end
-
-	local fallbackSpawn
-	local selectedSpawn
-	for _, spawn in spawns:GetChildren() do
-		if not spawn:IsA("BasePart") then continue end
-		fallbackSpawn = fallbackSpawn or spawn
-		if spawn.Name == "Spawn" or spawn.Name == "PlayerSpawn" or spawn.Name == "SpawnLocation" then
-			selectedSpawn = spawn
-			break
-		end
-	end
-	selectedSpawn = selectedSpawn or fallbackSpawn
-	if not selectedSpawn then return false end
-
-	local safeY = selectedSpawn.Position.Y + selectedSpawn.Size.Y / 2 + 4
-	if root.Position.Y >= safeY - 5 then return false end
-
-	local environment = context.environment
-	root.CFrame = environment.CFrame.new(selectedSpawn.Position.X, safeY, selectedSpawn.Position.Z)
-	root.AssemblyLinearVelocity = environment.Vector3.zero
-	root.AssemblyAngularVelocity = environment.Vector3.zero
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if humanoid then
-		pcall(function()
-			humanoid.PlatformStand = false
-			if humanoid.Health > 0 then humanoid:ChangeState(environment.Enum.HumanoidStateType.GettingUp) end
-		end)
-	end
-	return true
-end
-
-function FarmMotion.spawnHide(context)
-	local position = FarmMotion.spawnPosition(context)
-	if not position then return nil end
-	return position - context.environment.Vector3.new(0, 15, 0)
-end
-
-function FarmMotion.stageUnderMap(context, state, motion, root, humanoid, map, now)
-	local destination = FarmMotion.spawnHide(context)
-	if not destination then return false end
-	local character = root.Parent
-	local wasMovedDuringCountdown = not state.coinsLive and (root.Position - destination).Magnitude > 5
-	if motion.stagedMap ~= map or motion.stagedCharacter ~= character or motion.stagedRoot ~= root or wasMovedDuringCountdown then
-		FarmMotion.jump(context, motion, root, destination, true, now)
-		motion.stagedMap, motion.stagedCharacter, motion.stagedRoot = map, character, root
-		state.firstJump = false
-	end
-	motion.stagedForCoins = state.coinsLive == true
-	local lyingCFrame = context.environment.CFrame.new(destination) * context.environment.CFrame.Angles(math.pi / 2, 0, math.pi / 2)
-	root.CFrame = lyingCFrame
-	root.Velocity = context.environment.Vector3.zero
-	root.RotVelocity = context.environment.Vector3.zero
-	root.AssemblyLinearVelocity = context.environment.Vector3.zero
-	root.AssemblyAngularVelocity = context.environment.Vector3.zero
-	-- Create the movers only after applying the final orientation. This prevents
-	-- BodyGyro from visibly rotating the character from its previous pose.
-	local velocity, gyro = FarmMotion.ensureMover(context, root, humanoid, false, true)
-	if gyro then gyro.CFrame = lyingCFrame end
-	velocity.Velocity = context.environment.Vector3.zero
-	motion.phase = "wait"
-	return true
-end
-
-function FarmMotion.waitUnderMap(context, state, motion, options)
-	local environment, root, velocity, gyro = context.environment, options.root, options.velocity, options.gyro
-	local destination = FarmMotion.spawnHide(context)
-	if not destination then destination = FarmMotion.hideAt(context, state, motion, root, options.time) end
-	local lyingCFrame = environment.CFrame.new(destination) * environment.CFrame.Angles(math.pi / 2, 0, math.pi / 2)
-	if (root.Position - destination).Magnitude > 5 then root.CFrame = lyingCFrame end
-	if gyro then gyro.CFrame = lyingCFrame end
-	velocity.Velocity = environment.Vector3.zero
-	root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = environment.Vector3.zero, environment.Vector3.zero
-	motion.phase = "wait"
 end
 
 function FarmMotion.canShootAt(context, position, root)
@@ -21216,7 +21110,7 @@ function FarmMotion.shootSpot(context, state, motion, root, now)
 		return motion.spot
 	end
 	if (spot - root.Position).Magnitude < 1 and now - (motion.spotT or 0) > 1 then
-		local guard = rawget(context.environment.getgenv(), "__nessMuzzle")
+		local guard = rawget(context.environment.getgenv(), "__pulseMuzzle")
 		if type(guard) == "table" and guard.at and now - guard.at < 0.2 and guard.blocked then
 			motion.spot, motion.spotD = FarmMotion.findShootSpot(context, root, motion.spotBase or spot, (motion.spotD or 0) + 2)
 		end
@@ -21234,24 +21128,8 @@ function FarmMotion.underMap(context, state, motion, options)
 	local now, root, velocity, gyro, character = options.time, options.root, options.velocity, options.gyro, options.character
 	local murderer, gun = options.murderer, options.gun
 	local speed = math.clamp(tonumber(context.configuration.farm.speed) or 21, 8, 22)
-	if state.firstJump and not gun then
-		local safePosition = FarmMotion.spawnHide(context)
-		if safePosition then
-			FarmMotion.jump(context, motion, root, safePosition, true, now)
-			state.firstJump = false
-			motion.phase, motion.goT = "go", now
-			return
-		end
-	end
 	local coin = motion.coin
 	if gun then coin = gun end
-	if not gun and coin then
-		local belongsToActiveMap = false
-		for _, container in FarmMotion.containers(context, state, motion, now) do
-			if coin.Parent == container then belongsToActiveMap = true; break end
-		end
-		if not belongsToActiveMap then motion.coin, coin = nil, nil end
-	end
 	if not gun then
 		if coin and not FarmState.validCoin(context, state, coin) then
 			if motion.phase == "rise" and motion.riseFrom then
@@ -21267,10 +21145,8 @@ function FarmMotion.underMap(context, state, motion, options)
 				local current
 				if coin and FarmState.validCoin(context, state, coin) then
 					local info = FarmMotion.coinInfo(context, state, motion, coin, now)
-					if info.safeUnderMap then
-						current = (info.hide - root.Position).Magnitude + math.max(0, coin.Position.Y - info.hide.Y) * 1.2
-							+ (info.exposed and 25 or 0) + FarmMotion.murderPenalty(state, coin.Position, murderer)
-					end
+					current = (info.hide - root.Position).Magnitude + math.max(0, coin.Position.Y - info.hide.Y) * 1.2
+						+ (info.exposed and 25 or 0) + FarmMotion.murderPenalty(state, coin.Position, murderer)
 				end
 				if not current or score + 6 < current then
 					motion.coin, motion.phase, motion.goT, motion.tries, coin = candidate, "go", now, motion.tries + 1, candidate
@@ -21279,16 +21155,11 @@ function FarmMotion.underMap(context, state, motion, options)
 		end
 	end
 	if not coin then
-		FarmMotion.waitUnderMap(context, state, motion, options)
+		FarmMotion.move(context, root, velocity, gyro, FarmMotion.hideAt(context, state, motion, root, now), options.delta, speed)
+		motion.phase = "wait"
 		return
 	end
 	local info = FarmMotion.coinInfo(context, state, motion, coin, now)
-	if not info.safeUnderMap then
-		motion.skip[coin] = now + 1
-		motion.coin, motion.phase = nil, "go"
-		FarmMotion.waitUnderMap(context, state, motion, options)
-		return
-	end
 	if motion.phase ~= "rise" then
 		if motion.phase ~= "go" then motion.phase, motion.goT = "go", now end
 		local force = state.firstJump and coin ~= gun
@@ -21564,40 +21435,24 @@ function FarmMotion.teleport(context, state, motion, options)
 	motion.phase = "wait"
 end
 
-function FarmMotion.ensureMover(context, root, humanoid, withoutGyro, lieDown)
+function FarmMotion.ensureMover(context, root, humanoid, withoutGyro)
 	local environment = context.environment
-	local velocity = root:FindFirstChild("NessFarmBV")
+	local velocity = root:FindFirstChild("PulseFarmBV")
 	if not velocity then
 		velocity = environment.Instance.new("BodyVelocity")
-		velocity.Name, velocity.MaxForce, velocity.P = "NessFarmBV", environment.Vector3.new(9e9, 9e9, 9e9), 30000
+		velocity.Name, velocity.MaxForce, velocity.P = "PulseFarmBV", environment.Vector3.new(9e9, 9e9, 9e9), 30000
 		velocity.Velocity = environment.Vector3.zero
-		velocity:SetAttribute("NessMine", true)
+		velocity:SetAttribute("PulseMine", true)
 		velocity.Parent = root
 	end
-	local gyro = root:FindFirstChild("NessFarmBG")
+	local gyro = root:FindFirstChild("PulseFarmBG")
 	if withoutGyro and gyro then pcall(function() gyro:Destroy() end); gyro = nil end
 	if not withoutGyro and not gyro then
 		gyro = environment.Instance.new("BodyGyro")
-		gyro.Name, gyro.MaxTorque, gyro.P = "NessFarmBG", environment.Vector3.new(9e9, 9e9, 9e9), 30000
-		gyro:SetAttribute("NessMine", true)
-		gyro:SetAttribute("NessFarmLying", lieDown == true)
-		if lieDown then
-			gyro.P = 90000
-			gyro.CFrame = environment.CFrame.new(root.Position) * environment.CFrame.Angles(math.pi / 2, 0, math.pi / 2)
-		else
-			gyro.CFrame = environment.CFrame.lookAt(root.Position, root.Position + environment.Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z + 1e-4))
-		end
+		gyro.Name, gyro.MaxTorque, gyro.P = "PulseFarmBG", environment.Vector3.new(9e9, 9e9, 9e9), 30000
+		gyro:SetAttribute("PulseMine", true)
+		gyro.CFrame = environment.CFrame.lookAt(root.Position, root.Position + environment.Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z + 1e-4))
 		gyro.Parent = root
-	end
-	if gyro then
-		local wasLying = gyro:GetAttribute("NessFarmLying") == true
-		gyro:SetAttribute("NessFarmLying", lieDown == true)
-		gyro.P = lieDown and 90000 or 30000
-		if lieDown then
-			gyro.CFrame = environment.CFrame.new(root.Position) * environment.CFrame.Angles(math.pi / 2, 0, math.pi / 2)
-		elseif wasLying then
-			gyro.CFrame = environment.CFrame.lookAt(root.Position, root.Position + environment.Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z + 1e-4))
-		end
 	end
 	if humanoid and not humanoid.PlatformStand then pcall(function() humanoid.PlatformStand = true end) end
 	return velocity, gyro
@@ -21608,11 +21463,7 @@ function FarmMotion.move(context, root, velocity, gyro, destination, delta, spee
 	local distance = direction.Magnitude
 	velocity.Velocity = distance < 0.05 and context.environment.Vector3.zero or direction.Unit * math.min(speed, distance / math.max(delta, 1 / 60))
 	local horizontal = context.environment.Vector3.new(direction.X, 0, direction.Z)
-	if gyro and gyro:GetAttribute("NessFarmLying") == true then
-		gyro.CFrame = context.environment.CFrame.new(root.Position) * context.environment.CFrame.Angles(math.pi / 2, 0, math.pi / 2)
-	elseif gyro and horizontal.Magnitude > 0.4 then
-		gyro.CFrame = context.environment.CFrame.lookAt(root.Position, root.Position + horizontal.Unit)
-	end
+	if gyro and horizontal.Magnitude > 0.4 then gyro.CFrame = context.environment.CFrame.lookAt(root.Position, root.Position + horizontal.Unit) end
 	return distance
 end
 
@@ -21621,7 +21472,7 @@ function FarmMotion.reset(context, motion, character)
 		local root = character and character:FindFirstChild("HumanoidRootPart")
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if root then
-			for _, name in {"NessFarmBV", "NessFarmBG"} do local object = root:FindFirstChild(name); if object then object:Destroy() end end
+			for _, name in {"PulseFarmBV", "PulseFarmBG"} do local object = root:FindFirstChild(name); if object then object:Destroy() end end
 		end
 		if humanoid and humanoid.PlatformStand then
 			humanoid.PlatformStand = false
@@ -21653,7 +21504,7 @@ FarmRuntime.MapFarm = {}
 
 function FarmRuntime.MapFarm.create(context)
 	local environment = context.environment
-	local farm = {file = "NessHub/mm2_mapfarm.json", data = {}, dirty = false, K = 1.3, first = setmetatable({}, {__mode = "k"})}
+	local farm = {file = "PulseHub/mm2_mapfarm.json", data = {}, dirty = false, K = 1.3, first = setmetatable({}, {__mode = "k"})}
 	farm.SEED = {house2 = 20.1, hospital3 = 21.7, office3 = 23.4, mansion2 = 24.7, hotel2 = 24.8, bank2 = 25,
 		policestation = 25.2, factory = 26.5, biolab = 27, manor = 27.4, barn = 29.2, researchfacility = 29.9,
 		vampirescastle = 30.2, farmhouse = 30.9, spaceship = 31.9, mineshaft = 34.7, workplace = 39, milbase = 41.8}
@@ -21699,7 +21550,7 @@ function FarmRuntime.MapFarm.create(context)
 	farm.ckey = function(name, map)
 		local key = farm.key(name)
 		if type(farm.alias[key]) == "string" then return farm.alias[key] end
-		local vote = rawget(environment.getgenv(), "__nessVoteDbg")
+		local vote = rawget(environment.getgenv(), "__pulseVoteDbg")
 		if not vote or type(vote.isKey) ~= "function" or vote.isKey(key) then return key end
 		local guess = farm.guess(key, vote.isKey)
 		if guess then farm.merge(key, guess); return guess end
@@ -21724,7 +21575,7 @@ function FarmRuntime.MapFarm.create(context)
 		return nil
 	end
 	farm.at = function()
-		local motion = rawget(environment.getgenv(), "__nessFarmUF")
+		local motion = rawget(environment.getgenv(), "__pulseFarmUF")
 		local teleport = motion and motion.tp
 		if teleport and teleport.touchC and teleport.touchC.Parent and environment.os.clock() - (teleport.touchT or 0) < 1.5 then
 			return teleport.touchC.Position
@@ -21768,8 +21619,8 @@ function FarmRuntime.MapFarm.create(context)
 		if not farm.dirty or type(environment.writefile) ~= "function" then return end
 		farm.dirty = false
 		pcall(function()
-			if type(environment.isfolder) == "function" and not environment.isfolder("NessHub") and type(environment.makefolder) == "function" then
-				environment.makefolder("NessHub")
+			if type(environment.isfolder) == "function" and not environment.isfolder("PulseHub") and type(environment.makefolder) == "function" then
+				environment.makefolder("PulseHub")
 			end
 			environment.writefile(farm.file, context.http:JSONEncode(farm.data))
 		end)
@@ -21805,7 +21656,7 @@ end
 
 function FarmRuntime.MapFarm.install(context, active)
 	local farm, environment = FarmRuntime.MapFarm.create(context), context.environment
-	environment.getgenv().__nessMapFarm = farm
+	environment.getgenv().__pulseMapFarm = farm
 	environment.task.spawn(function()
 		local saved = environment.os.clock()
 		while active() do
@@ -21822,7 +21673,7 @@ function FarmRuntime.MapFarm.install(context, active)
 end
 
 function FarmRuntime.zombie(context)
-	local duel = rawget(context.environment.getgenv(), "__nessDuel")
+	local duel = rawget(context.environment.getgenv(), "__pulseDuel")
 	if type(duel) == "table" and duel.on and duel.mode == "Zombie" then return duel end
 	return nil
 end
@@ -21846,7 +21697,7 @@ end
 
 function FarmRuntime.zombieFling(context, state, motion, duel, root, now)
 	local environment, globals = context.environment, context.environment.getgenv()
-	local fling = rawget(globals, "__nessFlingPersist")
+	local fling = rawget(globals, "__pulseFlingPersist")
 	if state.flinging or environment.tick() - (state.lastFling or 0) < 1 or type(fling) ~= "function" then return end
 	motion.zfs = motion.zfs or {}
 	local best, lowest
@@ -21874,70 +21725,6 @@ function FarmRuntime.zombieFling(context, state, motion, duel, root, now)
 		state.antiFling, state.flinging, state.lastFling = antiFling, false, environment.tick()
 		if not ok or not result then motion.zfs[best] = environment.os.clock() + 6 end
 	end)
-end
-
-function FarmRuntime.flingMurdererWhenDone(context, state, motion, roles)
-	if not state.autoFling or state.flingDoneFired or state.flinging then return false end
-	if not state.enabled or not state.round or state.forcedFull or (state.roundCollected or 0) <= 0 then return false end
-	if type(roles) ~= "table" then return false end
-
-	local localRole = roles[context.player.Name]
-	if type(localRole) ~= "table" or localRole.Dead == true or localRole.Killed == true
-		or string.lower(tostring(localRole.Role or "")) ~= "innocent" then
-		return false
-	end
-
-	-- Do not fling after obtaining the sheriff's gun, whether it is equipped or
-	-- still in the backpack. In that case the normal full-bag shooting flow wins.
-	if SheriffRuntime.gun(context) then return false end
-
-	local murdererPlayer, murdererCharacter = AimTarget.murderer(context, roles)
-	local murdererHumanoid = murdererCharacter and murdererCharacter:FindFirstChildOfClass("Humanoid")
-	if not murdererPlayer or murdererPlayer == context.player or not murdererCharacter or not murdererHumanoid
-		or murdererHumanoid.Health <= 0 then
-		return false
-	end
-
-	local environment, globals = context.environment, context.environment.getgenv()
-	local fling = rawget(globals, "__nessFlingDown")
-	if type(fling) ~= "function" or globals.__nessManualFling or globals.__nessTouchFlinging then return false end
-
-	state.flingDoneFired, state.flinging = true, true
-	FarmMotion.reset(context, motion, context.player.Character)
-	environment.task.spawn(function()
-		local callSucceeded, flingSucceeded, reason = pcall(fling, murdererCharacter, 2)
-		state.flinging = false
-		if not callSucceeded or flingSucceeded == false then
-			state.flingDoneFired = false
-			globals.__nessFarmFlingLast = "error: " .. tostring(callSucceeded and reason or flingSucceeded)
-			return
-		end
-		globals.__nessFarmFlingLast = tostring(reason or "done")
-	end)
-	return true
-end
-
-function FarmMotion.returnToLobby(context, character)
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local lobby = context.workspace:FindFirstChild("RegularLobby") or context.workspace:FindFirstChild("Lobby")
-	local spawns = lobby and lobby:FindFirstChild("Spawns")
-	local spawn = spawns and spawns:FindFirstChildWhichIsA("BasePart")
-	if not spawn and lobby then spawn = lobby:FindFirstChildWhichIsA("SpawnLocation", true) end
-	if not spawn and lobby then spawn = lobby:FindFirstChildWhichIsA("BasePart", true) end
-	if not root or not spawn then return false end
-
-	local environment = context.environment
-	root.CFrame = spawn.CFrame + environment.Vector3.new(0, 4, 0)
-	root.Velocity, root.RotVelocity = environment.Vector3.zero, environment.Vector3.zero
-	root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = environment.Vector3.zero, environment.Vector3.zero
-	if humanoid then
-		pcall(function()
-			humanoid.PlatformStand = false
-			if humanoid.Health > 0 then humanoid:ChangeState(environment.Enum.HumanoidStateType.GettingUp) end
-		end)
-	end
-	return true
 end
 
 function FarmRuntime.killAll(context)
@@ -21985,10 +21772,10 @@ function FarmRuntime.shoot(context, motion, target)
 		return true
 	end
 	local root = character:FindFirstChild("HumanoidRootPart")
-	local gyro = root and root:FindFirstChild("NessFarmBG")
+	local gyro = root and root:FindFirstChild("PulseFarmBG")
 	if gyro then pcall(function() gyro:Destroy() end) end
 	local globals = context.environment.getgenv()
-	local aim = rawget(globals, "__nessAimX")
+	local aim = rawget(globals, "__pulseAimX")
 	if aim and aim.alive and type(aim.fireFor) == "function" then
 		if (type(aim.ready) ~= "function" or aim.ready()) and not aim.queued
 			and not (aim.pending and not aim.pending.dead and context.environment.os.clock() - (aim.pending.t or 0) < 0.5) then
@@ -21997,7 +21784,7 @@ function FarmRuntime.shoot(context, motion, target)
 		end
 		return true
 	end
-	if type(globals.__nessShotMurder) == "function" then pcall(globals.__nessShotMurder) end
+	if type(globals.__pulseShotMurder) == "function" then pcall(globals.__pulseShotMurder) end
 	return true
 end
 
@@ -22008,18 +21795,11 @@ function FarmRuntime.resetMotion(motion)
 	if motion.phase ~= "idle" then motion.phase = "go" end
 end
 
-function FarmRuntime.hasStagedMap(context, motion)
-	local activeMap = FarmState.map(context)
-	local character = context.player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	return activeMap ~= nil and motion.stagedMap == activeMap and motion.stagedCharacter == character and motion.stagedRoot == root
-end
-
 function FarmRuntime.setEnabled(context, state, motion, enabled)
 	state.enabled = enabled
 	local globals = context.environment.getgenv()
-	local antiCoin = globals.__nessAntiCoinInfo
-	if enabled and globals.__nessAntiCoin and antiCoin and type(antiCoin.set) == "function" then
+	local antiCoin = globals.__pulseAntiCoinInfo
+	if enabled and globals.__pulseAntiCoin and antiCoin and type(antiCoin.set) == "function" then
 		state.restoreAntiCoin = true
 		pcall(antiCoin.set, false)
 	end
@@ -22029,18 +21809,13 @@ function FarmRuntime.setEnabled(context, state, motion, enabled)
 	end
 	if enabled then state.firstJump = true; return end
 	state.active = false
-	local character = context.player.Character
-	FarmMotion.reset(context, motion, character)
-	if (context.configuration.farm and context.configuration.farm.method or "Under Map") == "Under Map" then
-		FarmMotion.returnToMap(context, character)
-	end
-	motion.stagedMap, motion.stagedCharacter, motion.stagedRoot, motion.stagedForCoins, motion.startupMethod = nil, nil, nil, nil, nil
+	FarmMotion.reset(context, motion, context.player.Character)
 end
 
 function FarmRuntime.installRejoin(context, api)
 	local environment, globals = context.environment, context.environment.getgenv()
 	local state = {busy = false, tries = 0}
-	globals.__nessRejoin = state
+	globals.__pulseRejoin = state
 	state.key = function()
 		local key = rawget(globals, "script_key")
 		if type(key) ~= "string" or key == "" then key = rawget(environment._G or {}, "script_key") end
@@ -22053,12 +21828,12 @@ function FarmRuntime.installRejoin(context, api)
 		if type(queue) ~= "function" then return false end
 		local key = state.key()
 		local prefix = key and string.format("script_key = %q\npcall(function() getgenv().script_key = %q end)\n", key, key) or ""
-		local source = prefix .. 'if not game:IsLoaded() then game.Loaded:Wait() end\ntask.wait(1)\nif getgenv().NessMM2HubState then return end\nloadstring(game:HttpGet("https://raw.githubusercontent.com/SixK1ng/gg/main/lessv2.lua"))()'
+		local source = prefix .. 'if not game:IsLoaded() then game.Loaded:Wait() end\ntask.wait(1)\nif getgenv().PulseMM2HubState then return end\nloadstring(game:HttpGet("offline://raw.githubusercontent.com/PulseZax/Loader/refs/heads/main/.lua"))()'
 		return pcall(queue, source)
 	end
 	state.onKick = function(message)
 		pcall(function()
-			local webhook = rawget(globals, "__nessFarmWebhook")
+			local webhook = rawget(globals, "__pulseFarmWebhook")
 			if type(webhook) == "table" and type(webhook.onKick) == "function" then environment.task.spawn(webhook.onKick, message) end
 		end)
 		if state.busy or context.configuration.farm.rejoin == false or not api.getEnabled() then return end
@@ -22118,51 +21893,20 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 	local alive = humanoid and humanoid.Health > 0
 	if now - runtime.roundAt >= 0.5 then
 		runtime.roundAt = now
-		local detectedMap = FarmState.map(context)
-		if state.endedMap and detectedMap ~= state.endedMap then state.endedMap = nil end
-		if not state.endedMap then
-			for _, container in FarmState.containers(context, state, now) do
-				if not container.Parent or #container:GetChildren() == 0 then continue end
-				state.sawCoins, state.coinsLive = true, true
-				if state.coinsStarted == 0 then state.coinsStarted = tickTime end
-				if not state.round then
-					state.round = true
-					state.firstJump = not FarmRuntime.hasStagedMap(context, motion)
-				end
-				break
-			end
+		for _, container in FarmState.containers(context, state, now) do
+			if not container.Parent or #container:GetChildren() == 0 then continue end
+			if state.coinsStarted == 0 then state.coinsStarted = tickTime end
+			if not state.round then state.round, state.firstJump = true, true end
+			break
 		end
 		local ok, roles = pcall(context.roles)
 		state.active = state.enabled and alive and ok and FarmState.canFarm(context, state, roles) or false
-	end
-	local farmMethod = context.configuration.farm and context.configuration.farm.method or "Under Map"
-	if farmMethod ~= "Teleport" and farmMethod ~= "Fast" then farmMethod = "Under Map" end
-	if motion.startupMethod ~= farmMethod then
-		motion.startupMethod = farmMethod
-		if farmMethod == "Under Map" then
-			motion.stagedMap, motion.stagedCharacter, motion.stagedRoot, motion.stagedForCoins = nil, nil, nil, nil
-			state.firstJump = true
-		end
-	end
-	-- LessV2 stages as soon as the new map exists, before coins and RoundStart
-	-- finish setting up. Doing it here keeps the server's countdown teleport from
-	-- visibly fighting the lying BodyGyro when the playable round begins.
-	if state.enabled and alive and root and farmMethod == "Under Map" then
-		local map = FarmState.map(context)
-		local staged = FarmRuntime.hasStagedMap(context, motion)
-		local canStageEarly = map and map ~= state.endedMap and not state.coinsLive
-		if map and (state.round or canStageEarly)
-			and (not staged or not state.coinsLive or motion.stagedForCoins ~= state.coinsLive)
-			and FarmMotion.stageUnderMap(context, state, motion, root, humanoid, map, now) then return end
 	end
 	if state.enabled and state.round and alive and not state.active and motion.phase ~= "idle" then
 		motion.cfLost = motion.cfLost or now
 		if now - motion.cfLost < 1.5 then
 			if root and humanoid then
-				-- Keep the staged pose while role data catches up. Omitting lieDown
-				-- briefly made the gyro stand upright before the first coin, then the
-				-- farm turned it sideways again and caused the visible spinning.
-				local velocity = FarmMotion.ensureMover(context, root, humanoid, false, farmMethod == "Under Map")
+				local velocity = FarmMotion.ensureMover(context, root, humanoid, false)
 				velocity.Velocity = environment.Vector3.zero
 			end
 			return
@@ -22173,7 +21917,7 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 		if motion.phase ~= "idle" then FarmMotion.reset(context, motion, character) end
 		return
 	end
-	if globals.__nessManualFling or globals.__nessTouchFlinging then
+	if globals.__pulseManualFling or globals.__pulseTouchFlinging then
 		if motion.phase ~= "idle" then FarmMotion.reset(context, motion, character) end
 		return
 	end
@@ -22196,7 +21940,7 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 		if not full then motion.zkN, motion.zkT = nil, nil end
 		if full then
 			local keepKilling = false
-			local killPass = rawget(globals, "__nessKillPass")
+			local killPass = rawget(globals, "__pulseKillPass")
 			if context.configuration.farm.zKill ~= false and type(killPass) == "function" and killPass() then
 				local count = 0
 				for _, player in context.players:GetPlayers() do if duel.isFoe(player) and duel.alive(player) then count += 1 end end
@@ -22224,9 +21968,6 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 			local _, target = AimTarget.murderer(context, roles)
 			if target and now - (motion.shootT or 0) >= 0.2 then motion.shootT = now; pcall(FarmRuntime.shoot, context, motion, target) end
 			handled = target ~= nil
-		end
-		if not handled and FarmRuntime.flingMurdererWhenDone(context, state, motion, roles) then
-			handled = true
 		end
 		if not handled and state.respawnOnFull and not state.forcedFull and not state.respawnPending and tickTime - (state.lastRespawn or 0) > 3 then
 			state.respawnPending = true
@@ -22258,8 +21999,9 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 	end
 	local gun = motion.gunTarget
 	if gun and (not gun.Parent or not state.pickGun) then motion.gunTarget, gun = nil, nil end
-	local method = farmMethod
-	local aim = zombieTarget and rawget(globals, "__nessAimX")
+	local method = context.configuration.farm.method
+	if method ~= "Teleport" and method ~= "Fast" then method = "Under Map" end
+	local aim = zombieTarget and rawget(globals, "__pulseAimX")
 	local zombieReady = zombieTarget and type(aim) == "table" and aim.alive and type(aim.ready) == "function" and aim.ready() and now >= (motion.zSkip or 0)
 	if zombieReady then
 		motion.zSince = motion.zSince or now
@@ -22271,7 +22013,7 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 	end
 	local zombieShooting = zombieReady and method == "Under Map"
 	local shooting = full and not gun and state.shootOnFull and hasGun and murderer ~= nil
-	local velocity, gyro = FarmMotion.ensureMover(context, root, humanoid, shooting, method == "Under Map")
+	local velocity, gyro = FarmMotion.ensureMover(context, root, humanoid, shooting)
 	if zombieShooting and gyro then pcall(function() gyro:Destroy() end); gyro = nil end
 	if method ~= motion.lastMethod then
 		motion.lastMethod, motion.coin, motion.hold, motion.dwellFrom = method, nil, nil, nil
@@ -22319,12 +22061,12 @@ end
 
 function FarmRuntime.install(context)
 	local environment, globals = context.environment, context.environment.getgenv()
-	globals.NESS_FARM_MM2_VERSION = (globals.NESS_FARM_MM2_VERSION or 0) + 1
-	local generation = globals.NESS_FARM_MM2_VERSION
-	globals.NESS_FARM_MM2_HEARTBEAT = true
+	globals.PULSE_FARM_MM2_VERSION = (globals.PULSE_FARM_MM2_VERSION or 0) + 1
+	local generation = globals.PULSE_FARM_MM2_VERSION
+	globals.PULSE_FARM_MM2_HEARTBEAT = true
 	local state, motion = FarmState.create(context), FarmMotion.create()
 	motion.ctRestore = function() FarmMotion.restoreTouch(motion) end
-	globals.__nessFarmUF = motion
+	globals.__pulseFarmUF = motion
 	local api = {}
 	api.setEnabled = function(value) FarmRuntime.setEnabled(context, state, motion, value) end
 	api.getEnabled = function() return state.enabled end
@@ -22342,9 +22084,9 @@ function FarmRuntime.install(context)
 		if not state.active then return "spectating" end
 		return FarmState.isFull(context, state, environment.tick()) and "full" or "farming"
 	end
-	globals.__nessFarmAPI = api
+	globals.__pulseFarmAPI = api
 	FarmRuntime.installRejoin(context, api)
-	local function active() return globals.NESS_FARM_MM2_HEARTBEAT and globals.NESS_FARM_MM2_VERSION == generation and context.isAlive() end
+	local function active() return globals.PULSE_FARM_MM2_HEARTBEAT and globals.PULSE_FARM_MM2_VERSION == generation and context.isAlive() end
 	local mapFarm = FarmRuntime.MapFarm.install(context, active)
 	local runtime = {roundAt = 0, gunAt = 0}
 	context.connect(context.runService.Heartbeat, function(delta)
@@ -22357,8 +22099,8 @@ function FarmRuntime.install(context)
 		local character = context.player.Character
 		if not character then return end
 		local parts
-		if type(globals.__nessNoclipParts) == "function" then
-			local ok, result = pcall(globals.__nessNoclipParts, character)
+		if type(globals.__pulseNoclipParts) == "function" then
+			local ok, result = pcall(globals.__pulseNoclipParts, character)
 			if ok and type(result) == "table" then parts = result end
 		end
 		if not parts then
@@ -22377,27 +22119,15 @@ function FarmRuntime.install(context)
 		end
 		listen("RoundStart", function()
 			FarmState.roundStart(state, environment.tick(), false)
-			state.firstJump = not FarmRuntime.hasStagedMap(context, motion)
+			state.firstJump = true
 			FarmRuntime.resetMotion(motion)
 		end)
 		listen("CoinsStarted", function()
 			FarmState.roundStart(state, environment.tick(), true)
-			state.firstJump = not FarmRuntime.hasStagedMap(context, motion)
+			state.firstJump = true
 			FarmRuntime.resetMotion(motion)
 		end)
-		listen("RoundEndFade", function()
-			state.endedMap = FarmState.map(context)
-			FarmState.roundEnd(state)
-			FarmMotion.reset(context, motion, context.player.Character)
-			motion.stagedMap, motion.stagedCharacter, motion.stagedRoot, motion.stagedForCoins = nil, nil, nil, nil
-			environment.task.spawn(function()
-				local deadline = environment.os.clock() + 4
-				while (globals.__nessManualFling or globals.__nessTouchFlinging) and environment.os.clock() < deadline do
-					environment.task.wait(0.05)
-				end
-				if not state.round then FarmMotion.returnToLobby(context, context.player.Character) end
-			end)
-		end)
+		listen("RoundEndFade", function() FarmState.roundEnd(state) end)
 		listen("CoinCollected", function(kind, count, maximum)
 			if state.enabled then pcall(mapFarm.hop) end
 			motion.evAt = environment.os.clock()
@@ -22431,20 +22161,20 @@ function FarmRuntime.install(context)
 	end)
 	local function stop()
 		FarmRuntime.setEnabled(context, state, motion, false)
-		if globals.NESS_FARM_MM2_VERSION == generation then globals.NESS_FARM_MM2_HEARTBEAT = false end
+		if globals.PULSE_FARM_MM2_VERSION == generation then globals.PULSE_FARM_MM2_HEARTBEAT = false end
 	end
 	return state, motion, api, stop
 end
 
 FarmRuntime.Webhook = {}
-FarmRuntime.Webhook.icons = {coin = "https://nesshub.gg/assets/mm2wh/coin.png", candy = "https://nesshub.gg/assets/mm2wh/candy.png",
-	mm2 = "https://nesshub.gg/assets/mm2wh/mm2.png"}
+FarmRuntime.Webhook.icons = {coin = "offline://pulsehub.gg/assets/mm2wh/coin.png", candy = "offline://pulsehub.gg/assets/mm2wh/candy.png",
+	mm2 = "offline://pulsehub.gg/assets/mm2wh/mm2.png"}
 FarmRuntime.Webhook.prestiges = {[0] = "", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"}
 FarmRuntime.Webhook.statuses = {waiting = "Waiting", farming = "Farming", spectating = "Spectating", full = "Full bag"}
 
 function FarmRuntime.Webhook.valid(url)
-	return type(url) == "string" and (url:match("^https://[%w%.]*discord%.com/api/webhooks/%d+/[%w%-_]+") ~= nil
-		or url:match("^https://[%w%.]*discordapp%.com/api/webhooks/%d+/[%w%-_]+") ~= nil)
+	return type(url) == "string" and (url:match("^offline://[%w%.]*discord%.com/api/webhooks/%d+/[%w%-_]+") ~= nil
+		or url:match("^offline://[%w%.]*discordapp%.com/api/webhooks/%d+/[%w%-_]+") ~= nil)
 end
 
 function FarmRuntime.Webhook.number(value)
@@ -22465,8 +22195,8 @@ function FarmRuntime.Webhook.load(context)
 	local environment = context.environment
 	local settings = {url = "", on = false, every = 10, kick = true}
 	pcall(function()
-		if not environment.isfile or not environment.isfile("NessHub/mm2_webhook.json") then return end
-		local data = context.http:JSONDecode(environment.readfile("NessHub/mm2_webhook.json"))
+		if not environment.isfile or not environment.isfile("PulseHub/mm2_webhook.json") then return end
+		local data = context.http:JSONDecode(environment.readfile("PulseHub/mm2_webhook.json"))
 		if type(data) ~= "table" then return end
 
 		if type(data.url) == "string" then settings.url = data.url end
@@ -22480,8 +22210,8 @@ end
 function FarmRuntime.Webhook.save(state)
 	local environment = state.context.environment
 	pcall(function()
-		if environment.isfolder and environment.makefolder and not environment.isfolder("NessHub") then environment.makefolder("NessHub") end
-		environment.writefile("NessHub/mm2_webhook.json", state.context.http:JSONEncode(state.cfg))
+		if environment.isfolder and environment.makefolder and not environment.isfolder("PulseHub") then environment.makefolder("PulseHub") end
+		environment.writefile("PulseHub/mm2_webhook.json", state.context.http:JSONEncode(state.cfg))
 	end)
 end
 
@@ -22491,7 +22221,7 @@ function FarmRuntime.Webhook.getIcons(state)
 	local context, environment = state.context, state.context.environment
 	state.icons = FarmRuntime.Webhook.icons
 	pcall(function()
-		local response = context.http:JSONDecode(environment.game:HttpGet("https://thumbnails.roblox.com/v1/assets?assetIds=3150319038,121588790682191&returnPolicy=PlaceHolder&size=250x250&format=Png&isCircular=false"))
+		local response = context.http:JSONDecode(environment.game:HttpGet("offline://thumbnails.roblox.com/v1/assets?assetIds=3150319038,121588790682191&returnPolicy=PlaceHolder&size=250x250&format=Png&isCircular=false"))
 		local icons = table.clone(FarmRuntime.Webhook.icons)
 		for _, item in response.data or {} do
 			if item.state ~= "Completed" or type(item.imageUrl) ~= "string" then continue end
@@ -22499,7 +22229,7 @@ function FarmRuntime.Webhook.getIcons(state)
 			if item.targetId == 121588790682191 then icons.candy = item.imageUrl end
 		end
 
-		response = context.http:JSONDecode(environment.game:HttpGet("https://thumbnails.roblox.com/v1/places/gameicons?placeIds=142823291&returnPolicy=PlaceHolder&size=256x256&format=Png&isCircular=false"))
+		response = context.http:JSONDecode(environment.game:HttpGet("offline://thumbnails.roblox.com/v1/places/gameicons?placeIds=142823291&returnPolicy=PlaceHolder&size=256x256&format=Png&isCircular=false"))
 		local item = response.data and response.data[1]
 		if item and item.state == "Completed" and type(item.imageUrl) == "string" then icons.mm2 = item.imageUrl end
 		state.icons = icons
@@ -22531,7 +22261,7 @@ end
 
 function FarmRuntime.Webhook.embed(state, kind, reason)
 	local context, environment = state.context, state.context.environment
-	local api = environment.getgenv().__nessFarmAPI
+	local api = environment.getgenv().__pulseFarmAPI
 	local icons = FarmRuntime.Webhook.getIcons(state)
 	local session = api and api.getSession and api.getSession() or 0
 	local rate = api and api.getRate and api.getRate() or 0
@@ -22561,9 +22291,9 @@ function FarmRuntime.Webhook.embed(state, kind, reason)
 		title, color = "Disconnected", 15158332
 		description ..= "\n**Reason** " .. tostring(reason or "Connection lost"):sub(1, 300)
 	end
-	return {author = {name = "Murder Mystery 2 | Ness Hub", icon_url = icons.mm2}, title = title, description = description, color = color,
+	return {author = {name = "Murder Mystery 2 | Pulse Hub", icon_url = icons.mm2}, title = title, description = description, color = color,
 		thumbnail = {url = profile.candies ~= nil and icons.candy or icons.coin}, fields = fields,
-		footer = {text = "nesshub.gg", icon_url = icons.coin}, timestamp = environment.DateTime.now():ToIsoDate()}
+		footer = {text = "pulsehub.gg", icon_url = icons.coin}, timestamp = environment.DateTime.now():ToIsoDate()}
 end
 
 function FarmRuntime.Webhook.post(state, payload)
@@ -22583,11 +22313,11 @@ function FarmRuntime.Webhook.send(state, kind, reason)
 	if not FarmRuntime.Webhook.valid(state.cfg.url) then return false, "url" end
 
 	local embed = FarmRuntime.Webhook.embed(state, kind, reason)
-	local success, code = FarmRuntime.Webhook.post(state, {username = "Ness Hub", avatar_url = (state.icons or FarmRuntime.Webhook.icons).mm2, embeds = {embed}})
+	local success, code = FarmRuntime.Webhook.post(state, {username = "Pulse Hub", avatar_url = (state.icons or FarmRuntime.Webhook.icons).mm2, embeds = {embed}})
 	if success then
 		state.sent += 1
 		if kind ~= "kick" then
-			local api = state.context.environment.getgenv().__nessFarmAPI
+			local api = state.context.environment.getgenv().__pulseFarmAPI
 			state.lastSess = api and api.getSession and api.getSession() or state.lastSess
 		end
 	end
@@ -22608,7 +22338,7 @@ function FarmRuntime.Webhook.step(state)
 	if not state.cfg.on or not FarmRuntime.Webhook.valid(state.cfg.url) then return end
 
 	local environment = state.context.environment
-	local api = environment.getgenv().__nessFarmAPI
+	local api = environment.getgenv().__pulseFarmAPI
 	local now = environment.os.clock()
 	if not (api and api.getEnabled and api.getEnabled()) then state.lastSent = now; return end
 	if now - state.lastSent < state.cfg.every * 60 then return end
@@ -22625,7 +22355,7 @@ function FarmRuntime.Webhook.controls(state, requestedSection)
 	pcall(function()
 		local native = section:LastSection()
 		if not native or not native.Input then return end
-		native:Input({Text = translation.tr("Webhook URL"), Placeholder = "https://discord.com/api/webhooks/...", Default = settings.url, Live = true, Callback = function(value)
+		native:Input({Text = translation.tr("Webhook URL"), Placeholder = "offline://discord.com/api/webhooks/...", Default = settings.url, Live = true, Callback = function(value)
 			settings.url = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 			FarmRuntime.Webhook.save(state)
 		end})
@@ -22662,8 +22392,8 @@ function FarmRuntime.Webhook.install(context)
 	local state = {context = context, cfg = FarmRuntime.Webhook.load(context), lastSent = now, lastSess = 0, startAt = now, sent = 0, kickAt = 0}
 	state.send = function(kind, reason) return FarmRuntime.Webhook.send(state, kind, reason) end
 	state.onKick = function(reason) FarmRuntime.Webhook.onKick(state, reason) end
-	environment.getgenv().__nessFarmWebhook = state
-	environment.getgenv().__nessFarmWebhookUI = function(section) FarmRuntime.Webhook.controls(state, section) end
+	environment.getgenv().__pulseFarmWebhook = state
+	environment.getgenv().__pulseFarmWebhookUI = function(section) FarmRuntime.Webhook.controls(state, section) end
 	environment.task.spawn(function() FarmRuntime.Webhook.getIcons(state) end)
 	environment.task.spawn(function()
 		while not state.closed and context.isAlive() do
@@ -22675,7 +22405,7 @@ function FarmRuntime.Webhook.install(context)
 	return state, function() state.closed = true end
 end
 
-function FarmRuntime.controls(context, api, performanceMode)
+function FarmRuntime.controls(context, api)
 	local section, settings, environment = context.section, context.configuration.farm, context.environment
 	section:Header("Stats")
 	local grid = section:Grid({Columns = 2, Height = 66, MinWidth = 150})
@@ -22693,15 +22423,9 @@ function FarmRuntime.controls(context, api, performanceMode)
 			Default = math.clamp(tonumber(settings[option[2]]) or option[5], option[3], option[4]),
 			Callback = function(value) settings[option[2]] = value end})
 	end
-	if performanceMode then
-		local control = section:Toggle({Text = "Performance Mode", Default = performanceMode.getEnabled(),
-			Callback = performanceMode.setEnabled})
-		if performanceMode.bindControl then performanceMode.bindControl(control) end
-	end
 	section:Toggle({Text = "Auto Farm", Default = false, Callback = api.setEnabled})
 	section:Toggle({Text = "Auto Rejoin on Kick", Default = settings.rejoin ~= false, Callback = function(value) settings.rejoin = not not value end})
 	for _, option in {{"Pick Up Gun", "PickGun", true}, {"Shoot Murderer on full bag", "ShootFull", true},
-		{"Fling Murderer When Done", "AutoFling", api.getAutoFling()},
 		{"Auto-Respawn on full bag", "Respawn", false}, {"Avoid Murderer", "Avoid", false},
 		{"Kill all on full bag (murder role)", "KillAura", false}} do
 		section:Toggle({Text = option[1], Default = option[3], Callback = api["set" .. option[2]]})
@@ -22736,7 +22460,7 @@ function RoleFarm.hold(context, state, value)
 	if value then state.acted = true end
 	if state.holding == value then return end
 	state.holding = value
-	context.environment.getgenv().__nessRoleFarmHold = value or nil
+	context.environment.getgenv().__pulseRoleFarmHold = value or nil
 end
 
 function RoleFarm.mine(context)
@@ -22802,12 +22526,12 @@ function RoleFarm.shoot(context, state, roles)
 	end
 	state.target = target.Name
 	local globals = context.environment.getgenv()
-	local aim = rawget(globals, "__nessAimX")
+	local aim = rawget(globals, "__pulseAimX")
 	if type(aim) == "table" and aim.alive and type(aim.fireFor) == "function" then
 		pcall(aim.fireFor, target, false, false)
 		return true
 	end
-	if type(globals.__nessShotMurder) == "function" then pcall(globals.__nessShotMurder) end
+	if type(globals.__pulseShotMurder) == "function" then pcall(globals.__pulseShotMurder) end
 	return true
 end
 
@@ -22911,7 +22635,7 @@ function RoleFarm.expInnocent(context, state, roles)
 	if sheriff and now >= state.flingWait and (state.flung[sheriff] or 0) < 4 then
 		state.flung[sheriff] = (state.flung[sheriff] or 0) + 1
 		state.state = "Flinging"
-		local fling = rawget(context.environment.getgenv(), "__nessFlingDown")
+		local fling = rawget(context.environment.getgenv(), "__pulseFlingDown")
 		local ok, result = false, nil
 		if type(fling) == "function" then ok, result = pcall(fling, sheriff, 0.8, {home = RoleFarm.lobby(context)}) end
 		state.flingWait = context.environment.os.clock() + (ok and result == true and 2.5 or 0.5)
@@ -22992,7 +22716,7 @@ function RoleFarm.install(context)
 	state.gun = function() return RoleFarm.gun(context) end
 	state.shoot = function(roles) return RoleFarm.shoot(context, state, roles) end
 	state.stabAll = function(roles) return RoleFarm.stabAll(context, roles) end
-	globals.__nessRoleFarm = state
+	globals.__pulseRoleFarm = state
 	environment.task.spawn(function()
 		while context.isAlive() do
 			environment.task.wait(0.1)
@@ -23007,7 +22731,7 @@ function RoleFarm.install(context)
 		local victory = gameplay and gameplay:WaitForChild("VictoryScreen", 30)
 		if not victory or not context.isAlive() then return end
 		table.insert(state.conns, context.connect(victory.OnClientEvent, function(_, mode, winner)
-			local sounds = rawget(globals, "__nessGameSounds")
+			local sounds = rawget(globals, "__pulseGameSounds")
 			local winners = type(sounds) == "table" and sounds.WIN and sounds.WIN[tostring(mode)]
 			if state.acted and winners and winners[tostring(winner)] == true then state.wins += 1 end
 			pcall(state.say, "END " .. tostring(mode) .. " " .. tostring(winner))
@@ -23018,7 +22742,7 @@ function RoleFarm.install(context)
 		state.on.inno, state.on.sheriff, state.on.murder, state.on.exp = false, false, false, false
 		RoleFarm.hold(context, state, false)
 		for _, connection in state.conns do pcall(function() connection:Disconnect() end) end
-		globals.__nessRoleFarmUI = nil
+		globals.__pulseRoleFarmUI = nil
 	end
 	return state, stop
 end
@@ -23189,7 +22913,7 @@ function BoxFarm.open(context, state)
 	local rare = {Legendary = true, Godly = true, Ancient = true, Unique = true, Vintage = true, Chroma = true}
 	if state.lastRarity and rare[tostring(state.lastRarity)] then
 		pcall(function()
-			local nova = context.environment.getgenv().__nessMM2Nova
+			local nova = context.environment.getgenv().__pulseMM2Nova
 			if nova and nova.Notify then nova:Notify({Title = tostring(state.lastRarity) .. ": " .. state.lastName, Kind = "success"}) end
 		end)
 	end
@@ -23204,7 +22928,7 @@ function BoxFarm.install(context)
 	if tonumber(settings.boxes.delay) == nil then settings.boxes.delay = 1 end
 	local state = {on = false, opened = 0, state = "Off", busy = false}
 	state.openOnce = function() return BoxFarm.open(context, state) end
-	environment.getgenv().__nessBoxes = state
+	environment.getgenv().__pulseBoxes = state
 	environment.task.spawn(function()
 		while context.isAlive() do
 			if state.on and not state.busy then
@@ -23218,7 +22942,7 @@ function BoxFarm.install(context)
 			environment.task.wait(0.3)
 		end
 	end)
-	return state, function() state.on = false; environment.getgenv().__nessBoxUI = nil end
+	return state, function() state.on = false; environment.getgenv().__pulseBoxUI = nil end
 end
 
 function BoxFarm.controls(context, state)
