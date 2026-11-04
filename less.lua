@@ -1,5 +1,6 @@
 loadstring(game:HttpGet("https://raw.githubusercontent.com/SixK1ng/gg/main/less.lua"))()
 
+
 if _G.LessV2Cleanup then
 	_G.__NessReloading = true
 	pcall(_G.LessV2Cleanup)
@@ -2900,8 +2901,9 @@ do
 				return HttpService:JSONDecode(request({ Url = arg, Method = "GET" }).Body)
 			end
 
-			if httpget then
-				return HttpService:JSONDecode(httpget(arg))
+			local hg = rawget(getfenv(), "httpget") or rawget(_G, "httpget") or (getgenv and getgenv().httpget)
+			if hg then
+				return HttpService:JSONDecode(hg(arg))
 			end
 			return HttpService:JSONDecode(game:HttpGet(arg))
 		end)
