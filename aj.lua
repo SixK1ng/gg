@@ -1,5 +1,10 @@
 --claude sigmer
-joinGames = {[142823291] = true,[920587237] = true,}
+joinGames = {
+	[142823291] = true,
+	[335132309] = true,
+	[636649648] = true,
+	[920587237] = true,
+}
 
 if getgenv().__mm2_autojoiner_loaded then return end
 getgenv().__mm2_autojoiner_loaded = true
@@ -9,9 +14,13 @@ repeat task.wait() until game:IsLoaded()
 -- detect which game we're in (needed BEFORE the character wait because in ADM
 -- the character doesn't spawn until a team has been chosen, so CharacterAdded
 -- would hang forever otherwise)
-local MM2_PLACE = 142823291
+local MM2_PLACES = {
+	[142823291] = true,
+	[335132309] = true,
+	[636649648] = true,
+}
 local ADM_PLACE = 920587237
-local IS_MM2 = game.PlaceId == MM2_PLACE
+local IS_MM2 = MM2_PLACES[game.PlaceId] == true
 local IS_ADM = game.PlaceId == ADM_PLACE
 
 -- ADM: choose the team BEFORE waiting for the character so CharacterAdded fires
