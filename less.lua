@@ -1,4 +1,5 @@
-loadstring(game:httpget("https://raw.githubusercontent.com/SixK1ng/gg/main/less.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/SixK1ng/gg/main/less.lua"))()
+
 if _G.LessV2Cleanup then
 	_G.__NessReloading = true
 	pcall(_G.LessV2Cleanup)
