@@ -1939,3 +1939,131 @@ if flag then
 
 	return
 end
+
+
+-- =========================================================
+-- Auto-Rejoin on Kick (standalone, multi-script safe)
+-- =========================================================
+do
+    -- >>> CONFIGURA ESTAS DOS LINEAS <<<
+    local SCRIPT_ID  = "A"  -- usa "A" en un script y "B" en el otro
+    local SCRIPT_URL = "https://raw.githubusercontent.com/SixK1ng/gg/main/gg.lua"   -- URL raw del script a re-inyectar al reconectar (deja "" si no quieres)
+    -- ===================================
+
+    local Players         = game:GetService("Players")
+    local TeleportService = game:GetService("TeleportService")
+    local GuiService      = game:GetService("GuiService")
+    local CoreGui         = game:GetService("CoreGui")
+    local player          = Players.LocalPlayer
+
+    local STATE_KEY  = "__autoRejoin_"   .. SCRIPT_ID
+    local LOADED_KEY = "__ScriptLoaded_" .. SCRIPT_ID
+
+    local state = { busy = false, tries = 0, enabled = true }
+    getgenv()[STATE_KEY] = state
+
+    local function getKey()
+        local key = rawget(getgenv(), "script_key")
+        if type(key) == "string" and key ~= "" then return key end
+        return nil
+    end
+
+    local function queueScript()
+        if SCRIPT_URL == "" then return false end
+        local queue = (syn and syn.queue_on_teleport)
+            or queue_on_teleport
+            or queueonteleport
+            or (fluxus and fluxus.queue_on_teleport)
+        if type(queue) ~= "function" then return false end
+
+        local key = getKey()
+        local prefix = key and string.format(
+            "script_key = %q\npcall(function() getgenv().script_key = %q end)\n",
+            key, key
+        ) or ""
+
+        local source = prefix ..
+            'if not game:IsLoaded() then game.Loaded:Wait() end\n' ..
+            'task.wait(1)\n' ..
+            'if getgenv().' .. LOADED_KEY .. ' then return end\n' ..
+            'getgenv().' .. LOADED_KEY .. ' = true\n' ..
+            'loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))()'
+
+        return pcall(queue, source)
+    end
+
+    local function onKick(message)
+        if state.busy or not state.enabled then return end
+        if getgenv().__rejoinInProgress then return end  -- evita que dos scripts peleen
+        getgenv().__rejoinInProgress = true
+
+        local text = tostring(message or ""):lower()
+        local blockedReasons = {
+            "same account", "another device", "different device",
+            "banned", "anti stealer"
+        }
+        for _, blocked in ipairs(blockedReasons) do
+            if text:find(blocked, 1, true) then
+                getgenv().__rejoinInProgress = false
+                return
+            end
+        end
+
+        state.busy   = true
+        state.msg    = tostring(message or "")
+        state.queued = queueScript()
+
+        task.spawn(function()
+            while true do
+                state.tries = state.tries + 1
+                pcall(function()
+                    if state.tries <= 2 then
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+                    else
+                        TeleportService:Teleport(game.PlaceId, player)
+                    end
+                end)
+                local waitTime = (state.tries <= 6 and 10)
+                              or (state.tries <= 12 and 30)
+                              or 60
+                task.wait(waitTime)
+            end
+        end)
+    end
+
+    if GuiService.ErrorMessageChanged then
+        GuiService.ErrorMessageChanged:Connect(function(message)
+            if type(message) == "string" and message ~= "" then
+                onKick(message)
+            end
+        end)
+    end
+
+    task.spawn(function()
+        local ok, overlay = pcall(function()
+            return CoreGui:WaitForChild("RobloxPromptGui", 20)
+                         :WaitForChild("promptOverlay", 20)
+        end)
+        if not ok or not overlay then return end
+
+        overlay.ChildAdded:Connect(function(prompt)
+            if prompt.Name ~= "ErrorPrompt" then return end
+            task.wait(0.5)
+            local message = ""
+            pcall(function() message = GuiService:GetErrorMessage() end)
+            if message == "" then
+                pcall(function()
+                    for _, label in ipairs(prompt:GetDescendants()) do
+                        if label:IsA("TextLabel") and #label.Text > #message then
+                            message = label.Text
+                        end
+                    end
+                end)
+            end
+            onKick(message ~= "" and message or "disconnected")
+        end)
+    end)
+end
+-- =========================================================
+
+
