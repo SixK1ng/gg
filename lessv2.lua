@@ -20820,11 +20820,11 @@ end
 
 local FarmState = {}
 local FARM_ROLES = {Zombie = true, Survivor = true, Vampire = true, Hunter = true, Villager = true, Freezer = true, Runner = true}
-local FARM_OPTIONS = {"respawnOnFull", "antiFling", "avoidMurder", "autoFling", "killAura", "pickGun", "shootOnFull"}
+local FARM_OPTIONS = {"respawnOnFull", "antiFling", "avoidMurder", "autoFling", "killAura", "killAssassin", "pickGun", "shootOnFull"}
 
 function FarmState.create(context)
 	local state = {enabled = false, round = false, active = false, session = 0, total = 0, rate = 0,
-		respawnOnFull = false, antiFling = true, avoidMurder = false, autoFling = false, killAura = true,
+		respawnOnFull = false, antiFling = true, avoidMurder = false, autoFling = false, killAura = false, killAssassin = false,
 		pickGun = true, shootOnFull = true, collected = {}, full = {}, skipped = {}, containers = {}, containersAt = 0,
 		bagItems = {}, bagAt = 0, coinsStarted = 0, knownRound = false, forcedFull = false}
 	local environment = context.environment
@@ -20851,17 +20851,26 @@ function FarmState.roundStart(state, now, coinsStarted)
 	state.round, state.skipped = true, {}
 	if not coinsStarted then state.collected = {} end
 	table.clear(state.full)
+	state.fullAt = nil
 	state.forcedFull, state.coinsStarted, state.knownRound = false, coinsStarted and now or 0, true
+	state.assassinFired = false
 	if not coinsStarted then state.active = false end
 end
 
 function FarmState.roundEnd(state)
 	state.round, state.active, state.collected, state.forcedFull, state.coinsStarted = false, false, {}, false, 0
+	state.fullAt = nil
+	table.clear(state.full)
+	state.assassinFired = false
 end
 
 function FarmState.coinCollected(state, now, kind, count, maximum)
 	if state.coinsStarted == 0 then state.coinsStarted = now end
-	if type(kind) == "string" and type(count) == "number" and type(maximum) == "number" then state.full[kind] = count >= maximum end
+	if type(kind) == "string" and type(count) == "number" and type(maximum) == "number" then
+		state.full[kind] = count >= maximum
+		-- Proof, from this round's own CoinCollected events, that the bag really filled up.
+		if count >= maximum then state.fullAt = state.fullAt or now end
+	end
 	local name = type(kind) == "string" and kind or "Coin"
 	local previous = state.collected[name] or 0
 	if not state.knownRound and state.collected[name] == nil and type(count) == "number" and count > 1 then previous = count - 1 end
@@ -21727,6 +21736,54 @@ function FarmRuntime.zombieFling(context, state, motion, duel, root, now)
 	end)
 end
 
+-- Full bag, no gun, classic-style round (not Assassin): fling the murderer out of the map.
+-- Returns true while a fling is started or running so the caller doesn't also respawn.
+function FarmRuntime.murdererFling(context, state, motion, roles, now)
+	local environment, globals = context.environment, context.environment.getgenv()
+	local fling = rawget(globals, "__nessFlingPersist")
+	if type(fling) ~= "function" or type(roles) ~= "table" or state.flinging then return state.flinging == true end
+	-- Only after this round's own events confirmed a full bag; stale "full" state at round start must not trigger it.
+	if not state.fullAt then return false end
+	local own = roles[context.player.Name]
+	local ownRole = own and tostring(own.Role):lower() or ""
+	if ownRole == "assassin" or ownRole:find("murder", 1, true) then return false end
+	for _, data in roles do
+		if type(data) == "table" and tostring(data.Role) == "Assassin" then return false end
+	end
+	local _, character = AimTarget.murderer(context, roles)
+	local player = character and context.players:GetPlayerFromCharacter(character)
+	if not player or player == context.player then return false end
+	motion.mfs = motion.mfs or {}
+	if now < (motion.mfs[player] or 0) then return false end
+	local data = roles[player.Name]
+	if type(data) == "table" and (data.Dead == true or data.Killed == true) then return false end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local targetRoot = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or humanoid.Health <= 0 or not targetRoot then return false end
+	-- The fling only works if our body collides with theirs (lobby vs round players do not).
+	local ownRoot = context.player.Character and context.player.Character:FindFirstChild("HumanoidRootPart")
+	if ownRoot then
+		local ok, collides = pcall(function()
+			return environment.game:GetService("PhysicsService"):CollisionGroupsAreCollidable(ownRoot.CollisionGroup, targetRoot.CollisionGroup)
+		end)
+		if ok and collides == false then motion.mfs[player] = now + 5; return false end
+	end
+	state.flinging, state.lastFling = true, environment.tick()
+	local antiFling = state.antiFling
+	state.antiFling = false
+	environment.task.spawn(function()
+		local ok, result = pcall(fling, player, {time = 10, stop = function()
+			local current = context.player.Character
+			local ownHumanoid = current and current:FindFirstChildOfClass("Humanoid")
+			return not state.enabled or not state.round or not state.autoFling or not ownHumanoid or ownHumanoid.Health <= 0
+				or SheriffRuntime.gun(context) ~= nil
+		end})
+		state.antiFling, state.flinging, state.lastFling = antiFling, false, environment.tick()
+		if not ok or not result then motion.mfs[player] = environment.os.clock() + 6 end
+	end)
+	return true
+end
+
 function FarmRuntime.killAll(context)
 	local character, environment = context.player.Character, context.environment
 	local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -21741,8 +21798,11 @@ function FarmRuntime.killAll(context)
 	if not knife then return end
 	local handle = knife:FindFirstChild("Handle") or knife:FindFirstChildWhichIsA("BasePart")
 	if not handle or not environment.firetouchinterest then return end
+	local getTarget = rawget(environment.getgenv(), "__nessAssassinTarget")
+	local onlyTarget = type(getTarget) == "function" and select(2, pcall(getTarget)) or nil
 	for _, player in context.players:GetPlayers() do
 		if player == context.player or not player.Character then continue end
+		if onlyTarget and player ~= onlyTarget then continue end
 		local target = player.Character
 		local targetHumanoid, targetRoot = target:FindFirstChild("Humanoid"), target:FindFirstChild("HumanoidRootPart")
 		if not targetHumanoid or targetHumanoid.Health <= 0 or not targetRoot then continue end
@@ -21758,6 +21818,24 @@ function FarmRuntime.killAll(context)
 		end
 		pcall(function() knife:Activate() end)
 	end
+end
+
+function FarmRuntime.hasKnife(context)
+	local character = context.player.Character
+	if character and character:FindFirstChild("Knife") then return true end
+	local backpack = context.player:FindFirstChild("Backpack")
+	return backpack ~= nil and backpack:FindFirstChild("Knife") ~= nil
+end
+
+-- Assassin hands out a new target after every kill, so one pass is not enough.
+function FarmRuntime.killAllAssassin(context, state)
+	state.assassinRunning = true
+	for pass = 1, 5 do
+		if not state.killAssassin or not FarmRuntime.hasKnife(context) then break end
+		pcall(FarmRuntime.killAll, context)
+		if pass < 5 then context.environment.task.wait(1) end
+	end
+	state.assassinRunning = false
 end
 
 function FarmRuntime.shoot(context, motion, target)
@@ -21964,10 +22042,18 @@ function FarmRuntime.tick(context, state, motion, runtime, delta)
 			pcall(FarmRuntime.killAll, context)
 			handled = true
 		end
+		if not handled and state.killAssassin and not state.assassinFired and FarmRuntime.hasKnife(context) then
+			state.assassinFired = true
+			environment.task.spawn(FarmRuntime.killAllAssassin, context, state)
+		end
+		if state.assassinRunning then handled = true end
 		if not handled and state.shootOnFull and SheriffRuntime.gun(context) and murderer then
 			local _, target = AimTarget.murderer(context, roles)
 			if target and now - (motion.shootT or 0) >= 0.2 then motion.shootT = now; pcall(FarmRuntime.shoot, context, motion, target) end
 			handled = target ~= nil
+		end
+		if not handled and state.autoFling and not hasGun and ok then
+			handled = FarmRuntime.murdererFling(context, state, motion, roles, now)
 		end
 		if not handled and state.respawnOnFull and not state.forcedFull and not state.respawnPending and tickTime - (state.lastRespawn or 0) > 3 then
 			state.respawnPending = true
@@ -22071,7 +22157,7 @@ function FarmRuntime.install(context)
 	api.setEnabled = function(value) FarmRuntime.setEnabled(context, state, motion, value) end
 	api.getEnabled = function() return state.enabled end
 	local setters = {Respawn = "respawnOnFull", AntiFling = "antiFling", Avoid = "avoidMurder", AutoFling = "autoFling",
-		KillAura = "killAura", PickGun = "pickGun", ShootFull = "shootOnFull"}
+		KillAura = "killAura", KillAssassin = "killAssassin", PickGun = "pickGun", ShootFull = "shootOnFull"}
 	for name, key in setters do
 		api["set" .. name] = function(value) state[key] = value; FarmState.save(context, state) end
 		api["get" .. name] = function() return state[key] end
@@ -22435,10 +22521,11 @@ function FarmRuntime.controls(context, api, performanceMode)
 	end
 	section:Toggle({Text = "Auto Rejoin on Kick", Default = settings.rejoin ~= false, Callback = function(value) settings.rejoin = not not value end})
 	section:Toggle({Text = "Anti-Fling", Default = api.getAntiFling(), Callback = api.setAntiFling})
-	for _, option in {{"Pick Up Gun", "PickGun", true}, {"Shoot Murderer on full bag", "ShootFull", true},
-		{"Auto-Respawn on full bag", "Respawn", false}, {"Avoid Murderer", "Avoid", false},
-		{"Kill all on full bag (murder role)", "KillAura", false}} do
-		section:Toggle({Text = option[1], Default = option[3], Callback = api["set" .. option[2]]})
+	for _, option in {{"Pick Up Gun", "PickGun"}, {"Shoot Murderer on full bag", "ShootFull"},
+		{"Auto-Respawn on full bag", "Respawn"}, {"Avoid Murderer", "Avoid"},
+		{"Kill all on full bag (murder role)", "KillAura"}, {"Kill all on full bag (Assassin)", "KillAssassin"},
+		{"Fling Murderer on full bag (no gun)", "AutoFling"}} do
+		section:Toggle({Text = option[1], Default = api["get" .. option[2]](), Callback = api["set" .. option[2]]})
 	end
 	for _, option in {{"Zombies: shoot as Survivor", "zShoot"}, {"Zombies: Kill All as Zombie", "zKill"},
 		{"Zombies: fling gun holders after reset", "zFling"}} do
@@ -23116,13 +23203,9 @@ function FlingFeature.down(context, state, targetCharacter, duration, options)
 		pcall(function() localCharacter:SetPrimaryPartCFrame(destination) end)
 		-- LessV2 writes the legacy properties. Write both APIs so current Roblox
 		-- physics replicates the same imness instead of reducing it locally.
+		-- Same as Onyx's SkidFling: legacy Velocity/RotVelocity only.
 		localRoot.Velocity = flingLinearVelocity
 		localRoot.RotVelocity = flingAngularVelocity
-		localRoot.AssemblyLinearVelocity = flingLinearVelocity
-		localRoot.AssemblyAngularVelocity = flingAngularVelocity
-		if environment.sethiddenproperty then
-			pcall(environment.sethiddenproperty, localRoot, "NetworkIsSleeping", false)
-		end
 	end
 
 	local function flingTargetPart(part)
@@ -23139,8 +23222,10 @@ function FlingFeature.down(context, state, targetCharacter, duration, options)
 				movementOffset = targetHumanoid.MoveDirection * part.Velocity.Magnitude / 1.25
 				moveToTargetPart(part, environment.CFrame.new(0, -1.5, 0) + movementOffset, environment.CFrame.Angles(math.rad(angle), 0, 0))
 				environment.task.wait()
+				movementOffset = targetHumanoid.MoveDirection * part.Velocity.Magnitude / 1.25
 				moveToTargetPart(part, environment.CFrame.new(2.25, 1.5, -2.25) + movementOffset, environment.CFrame.Angles(math.rad(angle), 0, 0))
 				environment.task.wait()
+				movementOffset = targetHumanoid.MoveDirection * part.Velocity.Magnitude / 1.25
 				moveToTargetPart(part, environment.CFrame.new(-2.25, -1.5, 2.25) + movementOffset, environment.CFrame.Angles(math.rad(angle), 0, 0))
 				environment.task.wait()
 				moveToTargetPart(part, environment.CFrame.new(0, 1.5, 0) + targetHumanoid.MoveDirection, environment.CFrame.Angles(math.rad(angle), 0, 0))
@@ -25753,7 +25838,7 @@ local ESP_PRESETS = {
 		tracer = true, tracerStyle = "Fade", tracerTo = "Center", tracerMurderer = true, distance = true,
 		textGrad = true, textShadow = true, infoCase = "UPPER", infoLayout = "Weapon Under", infoSize = 9}},
 	{name = "Box", values = {box = true, boxStyle = "Full", boxThickness = 1, outline = true, outlineInner = true, outlineSize = 1}},
-	{name = "Glow Box", values = {box = true, boxStyle = "Full", boxFill = true, boxFillAlpha = 50, boxGlow = true,
+	{name = "Glow Box", values = {box = true, boxStyle = "Full", boxFill = true, boxFillAlpha = 50,
 		boxGlow = true, glowSize = 6, glowStrength = 8, skeleton = true, offscreen = true, textGrad = true}},
 	{name = "Corners", values = {box = true, boxStyle = "Corners", cornerSize = 25, boxThickness = 1, outline = true, outlineSize = 2}},
 	{name = "Outline", values = {box = false, chams = true, chamsStyle = "Outline", chamsEdgeAlpha = 100, chamsFlash = false}},
@@ -26408,6 +26493,7 @@ function MurderFeature.install(context)
 	globals.__nessSetKillAll = function(enabled) state.killAll = not not enabled end
 	globals.__nessGetKillAll = function() return state.killAll end
 	globals.__nessKillPass = function() return MurderFeature.killPass(state) end
+	globals.__nessAssassinTarget = function() return MurderFeature.assassinTarget(state) end
 
 	local section = context.section
 	section:Group({Title = "Murder", Side = "Right"})
@@ -26418,8 +26504,7 @@ function MurderFeature.install(context)
 		section:Slider({Text = "Aura Radius", Min = 5, Max = 200, Default = 20, Decimals = 0, Suffix = " studs",
 			Callback = function(value) state.radius = value end})
 	end})
-	section:ToggleKey({Text = "Kill All", Default = false, Callback = function(enabled) state.killAll = not not enabled end})
-	section:Toggle({Text = "Kill Gun Players", Default = false, Callback = function(enabled) state.killGun = not not enabled end})
+	section:ToggleKey({Text = "Kill All", Default = false, Callback = function(enabled) state.killAll = not not enabled end})	section:Toggle({Text = "Kill Gun Players", Default = false, Callback = function(enabled) state.killGun = not not enabled end})
 	section:Header("Kill Player")
 	section:PlayerList({ExcludeLocal = true, Momentary = true, ActionIcon = "skull", OnSelect = function(player)
 		if player then MurderFeature.killPlayer(state, player) end
@@ -26454,7 +26539,43 @@ function MurderFeature.isMurderer(state, roles)
 	end
 
 	local role = roles[context.player.Name]
-	return role ~= nil and role.Role ~= nil and tostring(role.Role):lower():find("murder") ~= nil
+	local name = role ~= nil and role.Role ~= nil and tostring(role.Role):lower() or ""
+	if name:find("murder", 1, true) then return true end
+	-- Assassin mode: everyone is "Assassin" and holds a knife, so the role name alone isn't "Murderer".
+	if name:find("assassin", 1, true) then
+		return MurderFeature.findKnife(state, context.player.Character) ~= nil
+			or MurderFeature.findKnife(state, context.player:FindFirstChild("Backpack")) ~= nil
+	end
+	return false
+end
+
+function MurderFeature.isAssassin(state, roles)
+	local role = roles[state.context.player.Name]
+	return role ~= nil and role.Role ~= nil and tostring(role.Role):lower():find("assassin", 1, true) ~= nil
+end
+
+-- Assassin only credits the kill on your assigned target. The HUD shows it in MainGUI.Game.Target*,
+-- and PlayerIcon.Image carries the target's UserId (rbxthumb://...&id=<UserId>).
+function MurderFeature.assassinTarget(state)
+	local context = state.context
+	local gui = context.player:FindFirstChild("PlayerGui")
+	local main = gui and gui:FindFirstChild("MainGUI")
+	local game = main and main:FindFirstChild("Game")
+	if not game then return nil end
+	for _, frame in game:GetChildren() do
+		if not frame.Name:find("^Target") or not frame:IsA("GuiObject") or not frame.Visible then continue end
+		-- PlayerIcon is nested inside the frame, so the lookup must be recursive.
+		local icon = frame:FindFirstChild("PlayerIcon", true)
+		local userId = icon and tonumber(tostring(icon.Image):match("id=(%d+)"))
+		local label = frame:FindFirstChild("TargetName", true)
+		local text = label and label:IsA("TextLabel") and label.Text:lower() or nil
+		for _, player in context.players:GetPlayers() do
+			if player == context.player then continue end
+			if userId and player.UserId == userId then return player end
+			if not userId and text and (player.Name:lower() == text or player.DisplayName:lower() == text) then return player end
+		end
+	end
+	return nil
 end
 
 function MurderFeature.ready(state, roles)
@@ -26539,12 +26660,18 @@ function MurderFeature.killPass(state)
 	if not MurderFeature.ready(state, roles) then return false end
 
 	local armed, others = {}, {}
-	for _, player in context.players:GetPlayers() do
-		if not MurderFeature.validTarget(state, player, roles) then continue end
-		local root = player.Character:FindFirstChild("HumanoidRootPart")
-		if not root then continue end
-		local targets = MurderFeature.hasGun(player) and armed or others
-		table.insert(targets, root)
+	if MurderFeature.isAssassin(state, roles) then
+		local target = MurderFeature.assassinTarget(state)
+		local root = target and MurderFeature.validTarget(state, target, roles) and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+		if root then table.insert(others, root) end
+	else
+		for _, player in context.players:GetPlayers() do
+			if not MurderFeature.validTarget(state, player, roles) then continue end
+			local root = player.Character:FindFirstChild("HumanoidRootPart")
+			if not root then continue end
+			local targets = MurderFeature.hasGun(player) and armed or others
+			table.insert(targets, root)
+		end
 	end
 	for _, root in armed do MurderFeature.hit(state, root) end
 	for _, root in others do MurderFeature.hit(state, root) end
@@ -26559,7 +26686,10 @@ function MurderFeature.step(state)
 	local character = context.player.Character
 	local localRoot = character and character:FindFirstChild("HumanoidRootPart")
 	local targets = {}
+	local assassin = MurderFeature.isAssassin(state, roles)
+	local assassinTarget = assassin and MurderFeature.assassinTarget(state) or nil
 	for _, player in context.players:GetPlayers() do
+		if assassin and player ~= assassinTarget then continue end
 		if not MurderFeature.validTarget(state, player, roles) then continue end
 		local root = player.Character:FindFirstChild("HumanoidRootPart")
 		if not root then continue end
@@ -39720,7 +39850,7 @@ function AuraFeature.controls(state)
 		if binding or not state.key or not state.group then return end
 		local saved = record()
 		saved.off = type(saved.off) == "table" and saved.off or {}
-		saved.off[state.group] = value and nil or true
+		saved.off[state.group] = (not value) and true or nil
 		reapply()
 	end})
 	binding = false
@@ -51695,12 +51825,11 @@ end
 
 function NessApplication.Trolly.install(context)
 	local globals = context.environment.getgenv()
-	local previous = globals.__nessNpc or globals.__nessNpc
+	local previous = globals.__nessNpc
 	if previous and previous.remove then pcall(previous.remove) end
 	-- Remove this feature's leftovers when the source is re-executed.
 	for _, object in ipairs(context.workspace:GetDescendants()) do
-		if object:IsA("Model") and (object.Name == "NessNpc" or object.Name == "NessNpc"
-			or object.Name == "NessNpcActor" or object.Name == "NessNpcActor") then
+		if object:IsA("Model") and (object.Name == "NessNpc" or object.Name == "NessNpcActor") then
 			pcall(function() object:Destroy() end)
 		end
 	end
