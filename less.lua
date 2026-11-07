@@ -3897,11 +3897,11 @@ do
 							fn41()
 							tbl.finishFling()
 
-							if tbl.killWhenFull and not tbl.killFired and fn() == localPlayer then
+							if tbl.killWhenFull and not tbl.killFired and tbl.killAllNow and tbl.isKnifeHolder and tbl.isKnifeHolder() then
 								tbl.killFired = true
 
 								task.spawn(function()
-									pcall(killAll)
+									pcall(tbl.killAllNow)
 								end)
 							end
 						elseif flag15 and localPlayer.Character then
@@ -8072,13 +8072,146 @@ do
 		return tbl10
 	end
 
+	-- Assassin mode: every player holds a Knife, so fn() (first knife holder) can't tell who "the murderer" is.
+	local function ownKnife()
+		local character = localPlayer.Character
+		if character and character:FindFirstChild("Knife") then
+			return true
+		end
+		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+		return backpack ~= nil and backpack:FindFirstChild("Knife") ~= nil
+	end
+
+	local function roundData()
+		local modules = ReplicatedStorage:FindFirstChild("Modules")
+		local module = modules and modules:FindFirstChild("CurrentRoundClient")
+		if not module then
+			return nil
+		end
+		local ok, source = pcall(require, module)
+		if not ok or type(source) ~= "table" or type(source.GetLatestPlayerData) ~= "function" then
+			return nil
+		end
+		local ok2, data = pcall(source.GetLatestPlayerData)
+		return ok2 and type(data) == "table" and data or nil
+	end
+
+	local function isAssassin()
+		local data = roundData()
+		local mine = data and data[localPlayer.Name]
+		return type(mine) == "table" and tostring(mine.Role) == "Assassin" and mine.Dead ~= true
+	end
+
+	local function isKnifeHolder()
+		if isAssassin() then
+			return ownKnife()
+		end
+		return fn() == localPlayer
+	end
+
+	tbl.isAssassin = isAssassin
+	tbl.isKnifeHolder = isKnifeHolder
+
+	-- The HUD shows your assigned target in MainGUI.Game.Target*; PlayerIcon.Image carries the target's UserId.
+	local function assassinTarget()
+		local playerGui = localPlayer:FindFirstChild("PlayerGui")
+		local main = playerGui and playerGui:FindFirstChild("MainGUI")
+		local gameGui = main and main:FindFirstChild("Game")
+		if not gameGui then
+			return nil
+		end
+		for _, frame in ipairs(gameGui:GetChildren()) do
+			if frame.Name:find("^Target") and frame:IsA("GuiObject") and frame.Visible then
+				local icon = frame:FindFirstChild("PlayerIcon", true)
+				local userId = icon and tonumber(tostring(icon.Image):match("id=(%d+)"))
+				local label = frame:FindFirstChild("TargetName", true)
+				local text = label and label:IsA("TextLabel") and label.Text:lower() or nil
+				for _, player in ipairs(Players:GetPlayers()) do
+					if player ~= localPlayer then
+						if userId and player.UserId == userId then
+							return player
+						end
+						if not userId and text and (player.Name:lower() == text or player.DisplayName:lower() == text) then
+							return player
+						end
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	-- Only the assigned target counts, and the game hands out a new one after every kill: go one by one.
+	local function assassinKillAll(maxSeconds)
+		if tbl.assassinRunning then
+			return 0
+		end
+		tbl.assassinRunning = true
+		local kills = 0
+		pcall(function()
+			local started, idleSince, last = os.clock(), nil, nil
+			while os.clock() - started < (maxSeconds or 60) and isAssassin() and ownKnife() do
+				local target = assassinTarget()
+				if last and target ~= last then
+					local humanoid = last.Character and last.Character:FindFirstChildOfClass("Humanoid")
+					if not humanoid or humanoid.Health <= 0 then
+						kills += 1
+					end
+				end
+				last = target
+				if target and target.Character then
+					idleSince = nil
+					fn66({ target })
+				else
+					idleSince = idleSince or os.clock()
+					if os.clock() - idleSince > 3 then
+						break
+					end
+				end
+				task.wait(0.1)
+			end
+		end)
+		tbl.assassinRunning = false
+		return kills
+	end
+
+	tbl.killAllNow = function()
+		if isAssassin() then
+			if not ownKnife() then
+				v:Notify({ Title = "No knife", Content = "You don't have the knife.", Duration = 2, Icon = "x" })
+				return
+			end
+			local kills = assassinKillAll(60)
+			v:Notify({
+				Title = "Kill All",
+				Content = ("Assassin: %d kill%s."):format(kills, kills == 1 and "" or "s"),
+				Duration = 2,
+				Icon = "check",
+			})
+			return
+		end
+
+		if fn() ~= localPlayer then
+			v:Notify({ Title = "Not Murderer!", Content = "You don't have the knife.", Duration = 2, Icon = "x" })
+			return
+		end
+		local v6 = fn66(fn67(nil))
+
+		v:Notify({
+			Title = "Kill All",
+			Content = ("Stabbed %d player%s."):format(v6, v6 == 1 and "" or "s"),
+			Duration = 2,
+			Icon = "check",
+		})
+	end
+
 	fn44 = function(arg)
 		if not arg or arg == "" then
 			v:Notify({ Title = "No target", Content = "Pick a player first.", Duration = 2, Icon = "x" })
 			return
 		end
 
-		if fn() ~= localPlayer then
+		if not isKnifeHolder() then
 			v:Notify({ Title = "Not Murderer!", Content = "You don't have the knife.", Duration = 2, Icon = "x" })
 			return
 		end
@@ -8098,18 +8231,7 @@ do
 	end
 
 	fn45 = function()
-		if fn() ~= localPlayer then
-			v:Notify({ Title = "Not Murderer!", Content = "You don't have the knife.", Duration = 2, Icon = "x" })
-			return
-		end
-		local v6 = fn66(fn67(nil))
-
-		v:Notify({
-			Title = "Kill All",
-			Content = ("Stabbed %d player%s."):format(v6, v6 == 1 and "" or "s"),
-			Duration = 2,
-			Icon = "check",
-		})
+		task.spawn(tbl.killAllNow)
 	end
 
 	tbl8 = {
@@ -8151,7 +8273,7 @@ do
 					return
 				end
 
-				if fn() ~= localPlayer then
+				if not isKnifeHolder() then
 					return
 				end
 				fn66(fn67(tbl8.radius), true)
